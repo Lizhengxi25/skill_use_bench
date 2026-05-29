@@ -6,10 +6,32 @@ Infrastructure for running SkillsBench evaluations.
 
 ```
 experiments/
-├── configs/              # YAML configs for batch runs
-├── metrics-dashboard/    # React/TypeScript web dashboard for analyzing results
-└── sanity-tasks/         # Quick sanity check tasks
+├── configs/                              # YAML configs for batch runs
+│   └── skill-eval/                       # skillsbench_x/run_experiment.py inputs
+│       ├── group1-codex.yaml             # default codex/gpt-5.5 matrix
+│       └── codex-gpt5_5-{low,medium,     # reasoning-effort sweep (4 efforts)
+│            high,xhigh}.yaml
+├── metrics-dashboard/                    # React/TypeScript web dashboard for analyzing results
+├── sanity-tasks/                         # Quick sanity check tasks
+└── sweep-codex-gpt5_5-efforts.sh         # sequential driver for the 4 effort configs
 ```
+
+## Reasoning-effort sweep (codex / gpt-5.5)
+
+```bash
+./experiments/sweep-codex-gpt5_5-efforts.sh
+```
+
+Runs `--rows 0` (the with_skills row) of each effort config in turn. Per-effort
+stdout is tee'd to `runs/_sweep-<ts>/<effort>.log`. A failed effort does NOT
+abort the sweep — the script summarizes per-effort rc at the end.
+
+The reasoning-effort plumbing lives in the local BenchFlow fork on branch
+`feat/reasoning-effort` (see [`../README.md`](../README.md) "BenchFlow
+dependency" callout) and is documented in
+[`../docs/skill-eval-extension.md`](../docs/skill-eval-extension.md#reasoning-effort-sweeps),
+including the `minimal`-on-gpt-5.5 gotcha and the `run_experiment.py`
+aggregate-stage bug + manual workaround.
 
 ## Running Experiments
 

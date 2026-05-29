@@ -69,7 +69,10 @@ skillsbench_x/                 # extension package
                                # trajectory.jsonl → flat text on host
   rollout_direct.py            # alt: drives `codex exec` directly (no Docker)
   judge.py                     # LLM-as-judge over the host trajectory
-  aggregate.py                 # shim around test/analyze_grades.py
+  aggregate.py                 # invokes the in-tree analyze_grades.py
+  analyze_grades.py            # cascade scoring (vendored from
+                               # agent_skill_helps_training/test/, keeps
+                               # skillsbench self-contained)
   from_flat.py                 # HuggingFace flat-format → Harbor tasks/
   cli.py                       # unified entry: `skillsbench-x <subcommand>`
 tasks/<int>/                   # synthesized tasks; integer-ID slugs to avoid
@@ -97,6 +100,12 @@ uv run python3 skillsbench_x/run_experiment.py --config <yaml> --only judge,aggr
 # dry-run / single matrix row:
 uv run python3 skillsbench_x/run_experiment.py --config <yaml> --dry-run --rows 0
 ```
+
+Reasoning-effort sweeps (codex-acp only, via the BenchFlow `feat/reasoning-effort`
+patch) are wired through the YAML's matrix row `reasoning:` field, e.g.
+`reasoning: low | medium | high | xhigh` for gpt-5.5. Four sibling configs
+live in `experiments/configs/skill-eval/codex-gpt5_5-{low,medium,high,xhigh}.yaml`;
+`experiments/sweep-codex-gpt5_5-efforts.sh` runs them sequentially.
 
 Defaults: `--harness codex` ⇒ `codex-acp / gpt-5.5`, `--harness claude-code` ⇒
 `claude-agent-acp / claude-sonnet-4-6`. BenchFlow auto-symlinks `--skills-dir`

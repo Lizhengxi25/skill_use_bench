@@ -13,6 +13,18 @@ Usage:
     python3 skillsbench_x/run_experiment.py --config <yaml> --only rollout --rows 0,2
 
 See experiments/configs/skill-eval/group1-codex.yaml for the schema.
+
+Known issues
+------------
+* The aggregate stage currently crashes when ``aggregate.format: md`` is
+  set in the YAML: ``build_aggregate_cmd`` does ``cmd.append("--md")`` with
+  no value, but ``skillsbench_x/aggregate.py``'s argparse declares
+  ``--md PATH``.  Result: judging completes (grading_summary.json is
+  written), but no ``aggregate.md`` is produced and the orchestrator
+  reports row failure.  Workaround: invoke aggregation manually with
+  ``uv run python skillsbench_x/aggregate.py --grades grades/<id> --per-task``.
+  Fix candidate: ``cmd += ["--md", str(grade_dir / "aggregate.md")]``.
+  See docs/skill-eval-extension.md "Reasoning-effort sweeps" for details.
 """
 
 from __future__ import annotations

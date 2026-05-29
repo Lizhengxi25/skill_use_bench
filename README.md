@@ -40,14 +40,32 @@ credential-dependent or integration-incompatible tasks under `tasks_excluded/`;
 include those intentionally with the integration runner's
 `--no-default-excludes` option.
 
-SkillsBench uses `uv.lock` for reproducible experiments. BenchFlow is sourced
-from [`benchflow-ai/benchflow`](https://github.com/benchflow-ai/benchflow) on
-the `main` branch through `tool.uv.sources`; refresh it with
-`uv lock --upgrade-package benchflow && uv sync --locked` when you want the
-newest GitHub commit.
+SkillsBench uses `uv.lock` for reproducible experiments.
+
+> [!IMPORTANT]
+> **BenchFlow dependency, current state.** `pyproject.toml [tool.uv.sources]`
+> currently points at a local checkout via `path = "../benchflow",
+> editable = true` — a sibling directory next to this repo. The checkout is
+> expected to be on branch [`feat/reasoning-effort`](https://github.com/Lizhengxi25/benchflow_reasoning_efforts_patch/tree/feat/reasoning-effort)
+> (forked off upstream `7a479e9`) which carries the `--reasoning-effort` flag
+> for `codex-acp`. Anyone cloning this repo also needs that sibling.
+>
+> To switch back to a pinned remote rev (no editable, normal `uv sync` works
+> for fresh clones):
+> ```toml
+> # pyproject.toml
+> [tool.uv.sources]
+> benchflow = { git = "https://github.com/Lizhengxi25/benchflow_reasoning_efforts_patch.git", rev = "<sha>" }
+> ```
+> Then `uv lock --upgrade-package benchflow && uv sync --locked`. Do this
+> once the patch is upstreamed or once you're ready to freeze the fork SHA.
 
 For a step-by-step experiment workflow, open
 [`experiments/run_experiment.ipynb`](experiments/run_experiment.ipynb).
+For reasoning-effort sweeps over codex/gpt-5.5, see
+[`experiments/configs/skill-eval/codex-gpt5_5-{low,medium,high,xhigh}.yaml`](experiments/configs/skill-eval/)
+and the one-shot driver
+[`experiments/sweep-codex-gpt5_5-efforts.sh`](experiments/sweep-codex-gpt5_5-efforts.sh).
 
 ### API Keys
 
