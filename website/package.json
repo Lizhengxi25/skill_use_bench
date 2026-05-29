@@ -3,15 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "bun run generate-tasks && bun run generate-skills && bun run generate-verifiers && bun run generate-results && bun run generate-trajectories && next build",
+    "dev": "bun run generate-all && next dev",
+    "build": "bun run generate-all && next build",
     "start": "next start",
     "lint": "eslint",
+    "generate-all": "bun run generate-tasks && bun run generate-skills && bun run generate-rubrics && bun run generate-grades && bun run generate-results && bun run generate-trajectories && bun run generate-leaderboard",
     "generate-tasks": "bun x tsx scripts/generate-tasks-registry.ts",
     "generate-skills": "bun x tsx scripts/generate-skills-registry.ts",
-    "generate-verifiers": "bun x tsx scripts/generate-verifiers-registry.ts",
+    "generate-rubrics": "bun x tsx scripts/generate-rubrics-registry.ts",
+    "generate-grades": "bun x tsx scripts/generate-grades-registry.ts",
     "generate-results": "bun x tsx scripts/generate-results-registry.ts",
-    "generate-trajectories": "bun x tsx scripts/generate-trajectories-data.ts"
+    "generate-trajectories": "bun x tsx scripts/generate-trajectories-data.ts",
+    "generate-leaderboard": "bun x tsx scripts/generate-leaderboard.ts"
   },
   "dependencies": {
     "@iarna/toml": "^2.2.5",

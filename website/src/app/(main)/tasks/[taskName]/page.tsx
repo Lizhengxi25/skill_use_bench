@@ -2,7 +2,8 @@ import { Share } from "@/components/share";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getTask } from "@/utils/tasks";
-import { getVerifierCode } from "@/utils/verifiers";
+import { getRubric } from "@/utils/rubrics";
+import { getTaskGrades } from "@/utils/grades";
 import { getTaskResults } from "@/utils/results";
 import { getTrajectoryIndex } from "@/utils/trajectories";
 import { ArrowLeft, Calendar, Github, Tag, User } from "lucide-react";
@@ -18,14 +19,15 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const { taskName } = await params;
   const task = await getTask(taskName);
   if (!task) return {};
+  const name = task.displayName ?? task.title;
   return {
-    title: `${task.title} — ${task.category} Task`,
+    title: `${name} — ${task.category} Task`,
     description: task.description,
     alternates: {
       canonical: `https://skillsbench.ai/tasks/${encodeURIComponent(task.title)}`,
     },
     openGraph: {
-      title: `${task.title} — SkillsBench Task`,
+      title: `${name} — SkillsBench Task`,
       description: task.description,
     },
   };
@@ -55,7 +57,8 @@ export default async function TaskPage({ params }: PageProps) {
   const githubUrl = `https://github.com/benchflow-ai/skillsbench/tree/main/${task.path}`;
 
   // Fetch all data for tabs
-  const verifierCode = getVerifierCode(task.title);
+  const rubric = getRubric(task.title);
+  const grades = getTaskGrades(task.title);
   const results = getTaskResults(task.title);
   const trajectoryIndex = getTrajectoryIndex(task.title);
 
@@ -80,7 +83,7 @@ export default async function TaskPage({ params }: PageProps) {
         {/* Article Header */}
         <header className="mb-10 space-y-6 border-b border-border pb-8">
           <h1 className="text-3xl font-bold tracking-tight text-foreground md:text-4xl">
-            {task.title}
+            {task.displayName ?? task.title}
           </h1>
 
           <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
@@ -177,7 +180,8 @@ export default async function TaskPage({ params }: PageProps) {
         <TaskTabs
           task={task}
           instructionContent={instructionContent}
-          verifierCode={verifierCode}
+          rubric={rubric}
+          grades={grades}
           results={results}
           trajectoryIndex={trajectoryIndex}
         />

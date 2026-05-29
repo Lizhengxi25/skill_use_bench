@@ -34,12 +34,14 @@ export interface TrajectoryIndexEntry {
   harness: string;
   family: "anthropic" | "google" | "openai";
   condition: "No Skills" | "With Skills" | "Self-Generated";
+  /** Reasoning effort (treated as part of model identity). */
+  reasoning?: string;
   reward: number;
   execTimeSec: number;
-  /** Directory name within xiangyi-completed/ (e.g. "without-claude-code") */
-  conditionDir: string;
-  /** Agent name for trajectory file lookup (e.g. "claude-code", "codex", "gemini-cli") */
+  /** Agent name for trajectory format selection. */
   agentName: string;
+  /** Static, pre-parsed payload (steps + judge logs) under public/. */
+  payloadUrl: string;
 }
 
 export interface TaskResult {
@@ -49,6 +51,8 @@ export interface TaskResult {
   harness: string;
   family: "anthropic" | "google" | "openai";
   condition: "No Skills" | "With Skills" | "Self-Generated";
+  /** Reasoning effort (treated as part of model identity). */
+  reasoning?: string;
   score: number;
   trials: number;
   passCount: number;

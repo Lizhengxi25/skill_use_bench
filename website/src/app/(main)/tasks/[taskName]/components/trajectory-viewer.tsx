@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BRAND_COLORS } from "@/utils/brand-colors";
 import type { TrajectoryIndexEntry, TrajectorySummary, TrajectoryStep } from "@/utils/trajectory-types";
+import type { TrialPayload, JudgePhasePayload } from "@/utils/skilleval-types";
 import {
   Play,
   ChevronDown,
@@ -20,7 +21,14 @@ import {
   CheckCircle2,
   XCircle,
   Loader2,
+  Scale,
 } from "lucide-react";
+
+const PHASE_LABELS: Record<string, string> = {
+  skill_identification: "Skill Identification",
+  module_sequence: "Module Sequence",
+  post_processing: "Post-processing",
+};
 
 interface TrajectoryViewerProps {
   trajectoryIndex: TrajectoryIndexEntry[];
@@ -32,6 +40,7 @@ export function TrajectoryViewer({ trajectoryIndex, taskName }: TrajectoryViewer
   const [selectedCondition, setSelectedCondition] = useState<string>("");
   const [selectedTrialId, setSelectedTrialId] = useState<string>("");
   const [trajectory, setTrajectory] = useState<TrajectorySummary | null>(null);
+  const [judge, setJudge] = useState<JudgePhasePayload[]>([]);
   const [loading, setLoading] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
   const [allExpanded, setAllExpanded] = useState(false);
@@ -92,7 +101,7 @@ export function TrajectoryViewer({ trajectoryIndex, taskName }: TrajectoryViewer
     }
   }, [trials]);
 
-  // Fetch trajectory data from API (fetches from GitHub on demand)
+  // Fetch the pre-parsed, static per-trial payload (agent steps + judge logs).
   useEffect(() => {
     if (!selectedTrialId) return;
     const trial = trajectoryIndex.find((t) => t.trialId === selectedTrialId);
@@ -100,30 +109,23 @@ export function TrajectoryViewer({ trajectoryIndex, taskName }: TrajectoryViewer
 
     setLoading(true);
     setTrajectory(null);
+    setJudge([]);
     setExpandedSteps(new Set());
     setAllExpanded(false);
 
-    const params = new URLSearchParams({
-      trialId: trial.trialId,
-      conditionDir: trial.conditionDir,
-      agentName: trial.agentName,
-      task: trial.task,
-      model: trial.model,
-      modelShort: trial.modelShort,
-      harness: trial.harness,
-      family: trial.family,
-      condition: trial.condition,
-      reward: String(trial.reward),
-      execTimeSec: String(trial.execTimeSec),
-    });
-
-    fetch(`/api/trajectory?${params}`)
+    fetch(trial.payloadUrl)
       .then((r) => {
         if (!r.ok) throw new Error("Not found");
         return r.json();
       })
-      .then((data) => setTrajectory(data as TrajectorySummary))
-      .catch(() => setTrajectory(null))
+      .then((data: TrialPayload) => {
+        setTrajectory(data.trajectory);
+        setJudge(data.judge || []);
+      })
+      .catch(() => {
+        setTrajectory(null);
+        setJudge([]);
+      })
       .finally(() => setLoading(false));
   }, [selectedTrialId, trajectoryIndex]);
 
@@ -292,7 +294,42 @@ export function TrajectoryViewer({ trajectoryIndex, taskName }: TrajectoryViewer
           </div>
         </Card>
       )}
+
+      {/* Judge logs (LLM-as-judge reasoning, per phase) */}
+      {!loading && judge.length > 0 && <JudgeLogs judge={judge} />}
     </div>
+  );
+}
+
+function JudgeLogs({ judge }: { judge: JudgePhasePayload[] }) {
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border bg-muted/30">
+        <Scale className="w-3.5 h-3.5 text-muted-foreground" />
+        <span className="text-xs text-muted-foreground font-medium">Judge Logs</span>
+      </div>
+      <div className="divide-y divide-border">
+        {judge.map((j) => (
+          <details key={j.phase} className="group">
+            <summary className="flex items-center justify-between gap-2 px-4 py-2.5 cursor-pointer hover:bg-muted/20 list-none">
+              <span className="flex items-center gap-2 text-sm">
+                <ChevronRight className="w-3.5 h-3.5 text-muted-foreground group-open:rotate-90 transition-transform" />
+                {PHASE_LABELS[j.phase] ?? j.phase}
+              </span>
+              <Badge variant="outline" className="font-mono text-[10px]">
+                {j.score}/{j.max_score}
+                {j.critical_passed === false && (
+                  <span className="ml-1 text-red-500">· critical failed</span>
+                )}
+              </Badge>
+            </summary>
+            <pre className="text-[11px] font-mono whitespace-pre-wrap break-words bg-muted/40 px-4 py-3 max-h-[28rem] overflow-auto border-t border-border">
+              {j.log || "(no judge log recorded)"}
+            </pre>
+          </details>
+        ))}
+      </div>
+    </Card>
   );
 }
 

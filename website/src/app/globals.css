@@ -3,6 +3,13 @@
 @import "fumadocs-ui/css/preset.css";
 @import "tw-animate-css";
 
+/* Generated, gitignored data/payloads — never a source of utility classes.
+   Excluded so judge evidence excerpts that quote UI class strings (e.g.
+   `[&_svg:not([class*='size-'])]:size-4`) don't get compiled into CSS that
+   Turbopack's dev CSS parser rejects. */
+@source not "../data";
+@source not "../../public";
+
 @custom-variant dark (&:is(.dark *));
 
 html {

@@ -178,11 +178,62 @@ export function parseCodex(content: string): TrajectoryStep[] {
   return steps;
 }
 
+/**
+ * Parse the skill-eval ACP "flat" JSONL trajectory (codex-acp wrapper).
+ * One JSON object per line; types: user_message | agent_message | tool_call.
+ * Tool result text is only present for some tool_call events (kind=execute/edit);
+ * for read/search the wrapper leaves `content` empty, so only the title survives.
+ */
+export function parseSkillEvalFlat(content: string): TrajectoryStep[] {
+  const steps: TrajectoryStep[] = [];
+  const lines = content.split("\n").filter(Boolean);
+  let idx = 0;
+
+  for (const line of lines) {
+    let p: any;
+    try { p = JSON.parse(line); } catch { continue; }
+
+    if (p.type === "user_message") {
+      steps.push({ index: idx++, role: "user", text: truncate(p.text, TEXT_LIMIT) });
+    } else if (p.type === "agent_message") {
+      steps.push({ index: idx++, role: "assistant", text: truncate(p.text, TEXT_LIMIT) });
+    } else if (p.type === "tool_call") {
+      const kind = p.kind || "tool";
+      const failed = p.status === "failed" || p.status === "cancelled";
+      steps.push({
+        index: idx++,
+        role: "assistant",
+        toolCalls: [{ name: kind, input_summary: truncate(p.title || "", INPUT_LIMIT) }],
+        isError: failed,
+      });
+      // Surface any tool output the wrapper did record.
+      let out = "";
+      if (Array.isArray(p.content)) {
+        for (const c of p.content) {
+          const t = c?.content?.text ?? c?.text;
+          if (typeof t === "string") out += t;
+        }
+      }
+      if (out) {
+        steps.push({
+          index: idx++,
+          role: "tool_result",
+          toolName: kind,
+          output_summary: truncate(out, OUTPUT_LIMIT),
+          isError: failed,
+        });
+      }
+    }
+  }
+  return steps;
+}
+
 /** Determine the trajectory format from agent name */
-export type TrajectoryFormat = "claude" | "gemini" | "codex";
+export type TrajectoryFormat = "claude" | "gemini" | "codex" | "skilleval";
 
 export function getFormatForAgent(agentName: string): TrajectoryFormat {
   if (agentName === "gemini-cli") return "gemini";
+  if (agentName === "codex-acp" || agentName === "skilleval") return "skilleval";
   if (agentName === "codex") return "codex";
   return "claude";
 }
@@ -193,6 +244,7 @@ export function parseTrajectory(content: string, format: TrajectoryFormat): Traj
     case "claude": return parseClaudeCode(content);
     case "gemini": return parseGemini(content);
     case "codex": return parseCodex(content);
+    case "skilleval": return parseSkillEvalFlat(content);
   }
 }
 

@@ -1,6 +1,25 @@
-import fs from "fs";
 import path from "path";
-import { resolveTrajectoryBase, writeJsonOutput, fetchFromGitHub } from "./resolve-data-paths";
+import fs from "fs";
+import { writeJsonOutput } from "./resolve-data-paths";
+import {
+  resolveRepoRoot,
+  listGradeRuns,
+  listTaskIds,
+  taskKey,
+  readMetadataTsv,
+  modelIdentity,
+  condition,
+  readJudgePhase,
+  readJudgeLog,
+  microScore,
+  readTrajectoryJsonl,
+  readResultTimingSec,
+  type PhaseGrade,
+} from "./skilleval-data";
+import { parseSkillEvalFlat } from "../src/utils/trajectory-parser";
+
+const PHASE_ORDER = ["skill_identification", "module_sequence", "post_processing"];
+const JUDGE_LOG_CAP = 40000;
 
 interface IndexEntry {
   task: string;
@@ -8,148 +27,134 @@ interface IndexEntry {
   model: string;
   modelShort: string;
   harness: string;
-  family: "anthropic" | "google" | "openai";
-  condition: "No Skills" | "With Skills" | "Self-Generated";
-  reward: number;
+  family: string;
+  reasoning: string;
+  condition: "With Skills" | "No Skills";
+  reward: number; // micro-avg fraction 0..1
   execTimeSec: number;
-  conditionDir: string;
   agentName: string;
+  /** Static, pre-parsed payload (steps + judge logs). */
+  payloadUrl: string;
 }
 
-const EXCLUDED_TASKS = new Set(["fix-visual-stability"]);
+interface JudgePhasePayload {
+  phase: string;
+  score: number;
+  max_score: number;
+  critical_passed?: boolean;
+  log: string;
+}
 
-function normalizeModel(agentName: string, modelName: string): {
-  harness: string; model: string; modelShort: string; family: "anthropic" | "google" | "openai";
-} | null {
-  if (agentName === "claude-code") {
-    if (modelName.includes("opus-4-5") || modelName.includes("opus-4.5")) return { harness: "Claude Code", model: "Claude Code (Opus 4.5)", modelShort: "Opus 4.5", family: "anthropic" };
-    if (modelName.includes("opus-4-6") || modelName.includes("opus-4.6")) return { harness: "Claude Code", model: "Claude Code (Opus 4.6)", modelShort: "Opus 4.6", family: "anthropic" };
-    if (modelName.includes("sonnet-4-5") || modelName.includes("sonnet-4.5")) return { harness: "Claude Code", model: "Claude Code (Sonnet 4.5)", modelShort: "Sonnet 4.5", family: "anthropic" };
-    if (modelName.includes("haiku-4-5") || modelName.includes("haiku-4.5")) return { harness: "Claude Code", model: "Claude Code (Haiku 4.5)", modelShort: "Haiku 4.5", family: "anthropic" };
+function resolveRunDir(repoRoot: string, runDir: string): string {
+  if (runDir) {
+    const local = path.join(repoRoot, "runs", path.basename(runDir));
+    if (fs.existsSync(local)) return local;
+    if (fs.existsSync(runDir)) return runDir;
   }
-  if (agentName === "codex") return { harness: "Codex", model: "Codex (GPT-5.2)", modelShort: "GPT-5.2", family: "openai" };
-  if (agentName === "gemini-cli") {
-    if (modelName.includes("flash")) return { harness: "Gemini CLI", model: "Gemini CLI (Gemini 3 Flash)", modelShort: "Gemini 3 Flash", family: "google" };
-    if (modelName.includes("pro")) return { harness: "Gemini CLI", model: "Gemini CLI (Gemini 3 Pro)", modelShort: "Gemini 3 Pro", family: "google" };
-  }
-  return null;
+  return runDir;
 }
 
-function getCondition(dirName: string): "No Skills" | "With Skills" | "Self-Generated" | null {
-  if (dirName.startsWith("without-")) return "No Skills";
-  if (dirName.startsWith("withskills-")) return "With Skills";
-  if (dirName.startsWith("withgenerate-")) return "Self-Generated";
-  return null;
+function makeTrialKey(tk: string, modelKey: string, cond: string): string {
+  const m = modelKey
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "")
+    .toLowerCase();
+  const c = cond === "With Skills" ? "with" : "without";
+  return `${tk}__${m}__${c}`;
 }
 
-async function generateTrajectoriesData(): Promise<void> {
+function generateTrajectoriesData(): void {
+  const repoRoot = resolveRepoRoot();
   const indexOutputPath = path.join(__dirname, "..", "src", "data", "trajectories-index.json");
+  const payloadDir = path.join(__dirname, "..", "public", "skilleval");
 
-  const trajBase = resolveTrajectoryBase();
-  if (!trajBase) {
-    // Fallback: fetch pre-generated data from GitHub
-    const remote = await fetchFromGitHub<IndexEntry[]>("trajectories-index.json");
-    if (remote) {
-      writeJsonOutput(indexOutputPath, remote);
-      console.log(`[trajectories] Fetched ${remote.length} entries from GitHub`);
-      return;
-    }
-    console.warn("[trajectories] No data available, writing empty fallback");
-    writeJsonOutput(indexOutputPath, []);
-    return;
-  }
+  // Clear stale payloads, then recreate.
+  if (fs.existsSync(payloadDir)) fs.rmSync(payloadDir, { recursive: true, force: true });
+  fs.mkdirSync(payloadDir, { recursive: true });
 
-  const indexEntries: IndexEntry[] = [];
-  const conditionDirs = fs.readdirSync(trajBase, { withFileTypes: true });
+  const index: IndexEntry[] = [];
+  let payloadCount = 0;
 
-  for (const condDir of conditionDirs) {
-    if (!condDir.isDirectory()) continue;
+  for (const run of listGradeRuns(repoRoot)) {
+    const runDir = resolveRunDir(repoRoot, run.runDir);
 
-    const condition = getCondition(condDir.name);
-    if (!condition) continue;
+    for (const id of listTaskIds(run.gradeDir)) {
+      const meta = readMetadataTsv(runDir, id);
+      if (!meta) continue;
+      const ident = modelIdentity(meta);
+      const cond = condition(meta);
+      const tk = taskKey(run.dataset, id);
+      const trialId = makeTrialKey(tk, ident.modelKey, cond);
 
-    const condPath = path.join(trajBase, condDir.name);
-    const trialDirs = fs.readdirSync(condPath, { withFileTypes: true });
-    let condCount = 0;
-
-    for (const trialDir of trialDirs) {
-      if (!trialDir.isDirectory()) continue;
-
-      const trialPath = path.join(condPath, trialDir.name);
-      const taskName = trialDir.name.split("__")[0];
-      if (EXCLUDED_TASKS.has(taskName)) continue;
-
-      const trialId = trialDir.name;
-
-      // Read config
-      const configPath = path.join(trialPath, "config.json");
-      if (!fs.existsSync(configPath)) continue;
-
-      let agentName = "";
-      let modelName = "";
-      try {
-        const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-        agentName = config?.agent?.name || "";
-        modelName = config?.agent?.model_name || "";
-      } catch { continue; }
-
-      const normalized = normalizeModel(agentName, modelName);
-      if (!normalized) continue;
-
-      // Read reward
-      let reward = 0;
-      const resultPath = path.join(trialPath, "result.json");
-      if (fs.existsSync(resultPath)) {
-        try {
-          const result = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
-          const r = result?.verifier_result?.rewards?.reward;
-          if (typeof r === "number") reward = r;
-        } catch {}
+      // Scores (reward = micro-avg fraction).
+      const phases: PhaseGrade[] = [];
+      for (const phase of PHASE_ORDER) {
+        const g = readJudgePhase(run.gradeDir, id, phase);
+        if (g) phases.push(g);
       }
-      if (reward === 0) {
-        const rewardPath = path.join(trialPath, "verifier", "reward.txt");
-        if (fs.existsSync(rewardPath)) {
-          try {
-            const parsed = parseFloat(fs.readFileSync(rewardPath, "utf-8").trim());
-            if (!isNaN(parsed)) reward = parsed;
-          } catch {}
-        }
+      const micro = microScore(phases);
+      const reward = micro.max > 0 ? micro.score / micro.max : 0;
+      const execTimeSec = readResultTimingSec(runDir, id);
+
+      // Parse agent trajectory.
+      const raw = readTrajectoryJsonl(runDir, id);
+      const steps = raw ? parseSkillEvalFlat(raw) : [];
+
+      // Judge logs (raw .agent.log, capped).
+      const judge: JudgePhasePayload[] = [];
+      for (const phase of PHASE_ORDER) {
+        const g = readJudgePhase(run.gradeDir, id, phase);
+        if (!g) continue;
+        const log = (readJudgeLog(run.gradeDir, id, phase) || "").slice(0, JUDGE_LOG_CAP);
+        judge.push({
+          phase,
+          score: g.score,
+          max_score: g.max_score,
+          critical_passed: g.critical_passed,
+          log,
+        });
       }
 
-      // Compute exec time
-      let execTimeSec = 0;
-      if (fs.existsSync(resultPath)) {
-        try {
-          const result = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
-          if (result.started_at && result.finished_at) {
-            execTimeSec = Math.round(
-              (new Date(result.finished_at).getTime() - new Date(result.started_at).getTime()) / 1000
-            );
-          }
-        } catch {}
-      }
+      const payload = {
+        trajectory: {
+          task: tk,
+          trialId,
+          model: ident.model,
+          modelShort: ident.modelShort,
+          harness: ident.harness,
+          family: ident.family,
+          condition: cond,
+          reward,
+          execTimeSec,
+          totalSteps: steps.length,
+          steps,
+        },
+        judge,
+      };
+      fs.writeFileSync(path.join(payloadDir, `${trialId}.json`), JSON.stringify(payload));
+      payloadCount++;
 
-      indexEntries.push({
-        task: taskName,
+      index.push({
+        task: tk,
         trialId,
-        model: normalized.model,
-        modelShort: normalized.modelShort,
-        harness: normalized.harness,
-        family: normalized.family,
-        condition,
+        model: ident.model,
+        modelShort: ident.modelShort,
+        harness: ident.harness,
+        family: ident.family,
+        reasoning: ident.reasoning,
+        condition: cond,
         reward,
         execTimeSec,
-        conditionDir: condDir.name,
-        agentName,
+        agentName: "skilleval",
+        payloadUrl: `/skilleval/${trialId}.json`,
       });
-      condCount++;
     }
-
-    console.log(`  ${condDir.name}: ${condCount} trials`);
   }
 
-  writeJsonOutput(indexOutputPath, indexEntries);
-  console.log(`\nGenerated trajectories index: ${indexEntries.length} entries at ${indexOutputPath}`);
+  writeJsonOutput(indexOutputPath, index);
+  console.log(
+    `[trajectories] generated ${index.length} index entries + ${payloadCount} payloads at ${payloadDir}`,
+  );
 }
 
-generateTrajectoriesData().catch(console.error);
+generateTrajectoriesData();

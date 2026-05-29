@@ -10,7 +10,7 @@ import Link from "next/link";
 export const metadata: Metadata = {
   title: "Task Registry",
   description:
-    "Browse 84+ benchmark tasks in the SkillsBench task registry. Expert-curated evaluation tasks for AI coding agents across diverse domains including office suite, git, data processing, and more.",
+    "Browse the skill-eval task registry. Each task targets a hidden skill and is scored by an LLM judge against a per-task rubric.",
   alternates: { canonical: "https://skillsbench.ai/tasks" },
 };
 

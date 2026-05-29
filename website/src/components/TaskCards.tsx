@@ -80,7 +80,7 @@ export function TaskCard({ task }: { task: Task }) {
         <div className="flex items-start justify-between mb-2">
           <Link href={taskUrl} className="before:absolute before:inset-0 z-10">
             <CardTitle className="text-base font-bold font-sans tracking-tight">
-              {task.title}
+              {task.displayName ?? task.title}
             </CardTitle>
           </Link>
         </div>
@@ -143,7 +143,7 @@ export function TaskCard({ task }: { task: Task }) {
             href={githubUrl}
             target="_blank"
             rel="noopener noreferrer"
-            aria-label={`View ${task.title} source on GitHub`}
+            aria-label={`View ${task.displayName ?? task.title} source on GitHub`}
           >
             Source
           </a>

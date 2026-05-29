@@ -11,7 +11,7 @@ import Link from "next/link";
 export const metadata: Metadata = {
   title: "SkillsBench — Benchmarking How Well Agent Skills Work",
   description:
-    "The first evaluation framework measuring how AI agent skills improve performance. 94 expert-curated tasks, 20+ models, 4 agent harnesses. The leading skills bench for AI agent evaluation.",
+    "Skill-eval results: how reasoning effort and agent skills affect LLM performance, scored by an LLM judge across expert-curated tasks.",
   alternates: { canonical: "https://skillsbench.ai" },
 };
 

@@ -63,11 +63,16 @@ export function TaskResults({ results, taskName }: TaskResultsProps) {
     ...models.map((m) => Math.max(m.noSkills?.score ?? 0, m.withSkills?.score ?? 0))
   );
 
+  // Present harnesses (with their family colour) for the footer legend.
+  const harnesses = Array.from(
+    new Map(models.map((m) => [m.harness, m.family])).entries()
+  );
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          Model performance on this task (5 trials per config)
+          Model performance on this task — score is micro-averaged across the grading phases.
         </p>
         <div className="flex items-center gap-2">
           <span className="text-muted-foreground text-xs mr-1">Sort by</span>
@@ -128,22 +133,12 @@ export function TaskResults({ results, taskName }: TaskResultsProps) {
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="font-mono text-xs text-muted-foreground">
-                        {noScore.toFixed(0)}%
-                        {entry.noSkills && (
-                          <span className="text-muted-foreground/60 ml-1">
-                            ({entry.noSkills.passCount}/{entry.noSkills.trials})
-                          </span>
-                        )}
+                        {entry.noSkills ? `${noScore.toFixed(0)}%` : "—"}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="font-mono text-xs font-semibold text-foreground">
-                        {withScore.toFixed(0)}%
-                        {entry.withSkills && (
-                          <span className="text-muted-foreground/60 font-normal ml-1">
-                            ({entry.withSkills.passCount}/{entry.withSkills.trials})
-                          </span>
-                        )}
+                        {entry.withSkills ? `${withScore.toFixed(0)}%` : "—"}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-xs hidden sm:table-cell">
@@ -184,20 +179,17 @@ export function TaskResults({ results, taskName }: TaskResultsProps) {
 
         {/* Footer legend */}
         <div className="bg-muted/30 px-6 py-2.5 border-t border-border flex flex-wrap items-center justify-between gap-y-2 text-xs text-muted-foreground">
-          <span>5 trials per task per config</span>
+          <span>Each reasoning effort is treated as a separate model.</span>
           <div className="flex gap-4">
-            <Badge variant="outline" className="border-0 text-xxs gap-1.5 px-0">
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: BRAND_COLORS.anthropic }} />
-              Claude Code
-            </Badge>
-            <Badge variant="outline" className="border-0 text-xxs gap-1.5 px-0">
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: BRAND_COLORS.google }} />
-              Gemini CLI
-            </Badge>
-            <Badge variant="outline" className="border-0 text-xxs gap-1.5 px-0">
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: BRAND_COLORS.openai }} />
-              Codex
-            </Badge>
+            {harnesses.map(([harness, family]) => (
+              <Badge key={harness} variant="outline" className="border-0 text-xxs gap-1.5 px-0">
+                <span
+                  className="w-2 h-2 rounded-full"
+                  style={{ backgroundColor: BRAND_COLORS[family] }}
+                />
+                {harness}
+              </Badge>
+            ))}
           </div>
         </div>
       </Card>

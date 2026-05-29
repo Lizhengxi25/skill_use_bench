@@ -2,15 +2,13 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { Leaderboard } from "@/components/Leaderboard";
 import {
   leaderboardData,
   SORT_OPTIONS,
   type SortKey,
 } from "@/data/leaderboard-data";
-
-const HF_URL = "https://huggingface.co/benchflow";
 
 export function LeaderboardClient() {
   const [sortKey, setSortKey] = useState<SortKey>("with_skills");
@@ -28,24 +26,13 @@ export function LeaderboardClient() {
         </Link>
         <h1 className="text-3xl font-bold tracking-tight mb-4">Agent Leaderboard</h1>
         <p className="text-muted-foreground text-lg max-w-2xl">
-          Performance benchmarks of AI agents on SkillsBench ({leaderboardData[0].tasks} tasks, up to {leaderboardData[0].trialsPerTask} trials per task).
-          Tasks that encountered runtime errors during evaluation were excluded.
+          Skill-eval scores across {leaderboardData.length} model configurations on{" "}
+          {leaderboardData[0]?.tasks ?? 0} tasks. Each task is scored by an LLM judge and
+          micro-averaged across its grading phases.
         </p>
         <p className="text-muted-foreground text-sm max-w-2xl mt-3">
-          Error bars are 95% task-level (Method D) confidence intervals — each task contributes one independent unit, not three correlated trials. All models were evaluated at their provider&apos;s highest available reasoning/thinking effort.
-        </p>
-        <p className="text-muted-foreground text-sm max-w-2xl mt-2 flex items-center gap-1.5 flex-wrap">
-          <span>Trajectories are no longer hosted on the website — download them from</span>
-          <Link
-            href={HF_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 font-medium text-foreground hover:text-primary transition-colors underline underline-offset-2 decoration-muted-foreground/40 hover:decoration-primary"
-          >
-            huggingface.co/benchflow
-            <ExternalLink className="w-3 h-3" />
-          </Link>
-          <span>.</span>
+          Error bars are 95% task-level confidence intervals. Each reasoning effort is treated as a
+          separate model, compared with vs. without skills.
         </p>
       </div>
 

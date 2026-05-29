@@ -46,10 +46,12 @@ export function TaskExplorer({ tasks }: { tasks: Task[] }) {
   );
 
   const filteredTasks = useMemo(() => {
+    const q = searchQuery.toLowerCase();
     return tasks.filter((task) => {
-      const matchesSearch = task.title
-        .toLowerCase()
-        .includes(searchQuery.toLowerCase());
+      const matchesSearch =
+        (task.displayName ?? task.title).toLowerCase().includes(q) ||
+        task.title.toLowerCase().includes(q) ||
+        task.tags.some((t) => t.toLowerCase().includes(q));
       const matchesTag =
         selectedTag === "all" || task.tags.includes(selectedTag);
       const matchesDifficulty =

@@ -1,7 +1,12 @@
 import tasksRegistry from "../data/tasks-registry.json";
 
 export interface Task {
-  title: string;
+  title: string; // stable join/route key, e.g. "group1-1"
+  /** Human-facing name shown as the page title (the skill name). */
+  displayName?: string;
+  skillName?: string;
+  taskId?: string;
+  dataset?: string;
   category: string;
   difficulty: "easy" | "medium" | "hard";
   description: string;

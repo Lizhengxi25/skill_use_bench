@@ -312,9 +312,8 @@ export function Leaderboard({
         <h2 className="text-xl font-bold">Agent Performance</h2>
       </div>
       <p className="text-muted-foreground text-sm mb-6 max-w-2xl">
-        Pass rates across {leaderboardData.length} agent–model configurations on SkillsBench (
-        {leaderboardData[0].tasks} tasks, up to{" "}
-        {leaderboardData[0].trialsPerTask} trials per task).
+        Skill-eval scores across {leaderboardData.length} model configurations (each reasoning
+        effort is a separate model), micro-averaged across {leaderboardData[0]?.tasks ?? 0} tasks.
       </p>
 
       {/* Sort controls */}
@@ -546,9 +545,7 @@ export function Leaderboard({
         <div className="px-6 py-2.5 border-t border-border bg-muted/30 flex flex-wrap items-center justify-between gap-y-2 text-xs text-muted-foreground">
           <div className="flex items-center gap-4">
             <span>
-              {leaderboardData[0].tasks} tasks &middot; up to{" "}
-              {leaderboardData[0].trialsPerTask} trials per task &middot; 95%
-              CIs
+              {leaderboardData[0]?.tasks ?? 0} tasks &middot; LLM-as-judge &middot; 95% CIs
             </span>
             {sortKey === "raw" ? (
               <span className="hidden sm:flex items-center gap-2 text-muted-foreground/50">
