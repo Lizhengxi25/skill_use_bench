@@ -1,0 +1,58 @@
+# One-click experiment config for the skill-eval pipeline.
+# Driven by skillsbench_x/run_experiment.py.
+#
+# Usage:
+#   python3 skillsbench_x/run_experiment.py --config experiments/configs/skill-eval/group1-codex.yaml
+#   python3 skillsbench_x/run_experiment.py --config <this> --dry-run
+#   python3 skillsbench_x/run_experiment.py --config <this> --only judge,aggregate   # re-grade only
+
+# One per reasoning effort (low/medium/high/xhigh) so each run_id is
+# distinct under runs/ and grades/.  The `reasoning:` value on the
+# with_skills row must match the slug suffix.
+name: group1-codex-xhigh
+tasks_root: tasks_runtime/20260601-group1   # where the Harbor tasks live
+runs_root: runs                              # rollout artifacts (gitignored)
+grades_root: grades                          # judge artifacts (gitignored)
+
+# Bump `rev` and re-run with `--only judge,aggregate` after editing rubrics.
+# A new grade_id (containing the new rev) is produced; old grades are preserved.
+rev: 1
+
+# Naming: produces e.g. runs/group1-codex-xhigh-codex-with/  and
+# grades/group1-codex-xhigh-codex-with--rev1/
+run_id_template:   "{name}-{harness}-{skills}"
+grade_id_template: "{run_id}--rev{rev}"
+
+# Experiment matrix.  Each row is one independent rollout + judge + aggregate.
+# Harness defaults: codex → codex-acp/gpt-5.5, claude-code → claude-agent-acp/claude-sonnet-4-6.
+matrix:
+  - harness: codex
+    with_skills: true
+    model: gpt-5.5            # uncomment to override default
+    reasoning: xhigh            # uncomment to override default
+  - harness: codex
+    with_skills: false
+    model: gpt-5.5            # uncomment to override default
+    reasoning: xhigh            # uncomment to override default
+
+  # Add claude rows after `claude login` succeeds on this host.
+  # - harness: claude-code
+  #   with_skills: true
+  # - harness: claude-code
+  #   with_skills: false
+
+rollout:
+  concurrency: 10
+  # Forwarded verbatim to `bench run` after the `--` separator.
+  # `--sandbox-user none` runs the agent as root in the container (matches the
+  # earlier-validated smoke; switch to `agent` once we've vetted the non-root
+  # user path with codex-acp).
+  bench_extra_args: ["--sandbox-user", "none"]
+
+judge:
+  concurrency: 30   # judge is host-local; rate limit is the OpenAI API tier
+  reasoning: high
+
+aggregate:
+  format: md
+  per_task: true
