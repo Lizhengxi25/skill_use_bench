@@ -13,11 +13,46 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         jq \
         ripgrep \
+        xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --break-system-packages --no-cache-dir \
         pytest==8.4.1 \
         pytest-json-ctrf==0.3.5
+
+# ── Pre-bake BenchFlow's isolated Node + codex-acp agent ───────────────────
+# BenchFlow installs ACP agents at *runtime* into /opt/benchflow (see
+# benchflow.agents.registry).  Its install command is idempotent — it skips the
+# download whenever the target binaries already exist — so baking them here turns
+# the per-task "Installing codex-acp in sandbox" step into a no-op and avoids one
+# Node tarball + one npm download *per task* (~1400× over a full sweep).  Paths
+# MUST match registry.py (_BENCHFLOW_NODE_PREFIX / _BENCHFLOW_JS_AGENT_PREFIX /
+# _BENCHFLOW_BIN_PREFIX) or the runtime guard won't recognize them.  Pin
+# CODEX_ACP_PKG to a concrete version for full run-to-run reproducibility.
+ARG BF_NODE_VERSION=22.14.0
+ARG CODEX_ACP_PKG=@zed-industries/codex-acp@latest
+RUN set -eux; \
+    arch="$(uname -m)"; \
+    case "$arch" in \
+        x86_64|amd64)  node_arch=x64 ;; \
+        aarch64|arm64) node_arch=arm64 ;; \
+        *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    mkdir -p /opt/benchflow/node /opt/benchflow/js-agents /opt/benchflow/bin; \
+    tmp="$(mktemp -d)"; \
+    curl -fsSLo "$tmp/node.tar.xz" \
+        "https://nodejs.org/dist/v${BF_NODE_VERSION}/node-v${BF_NODE_VERSION}-linux-${node_arch}.tar.xz"; \
+    tar -xJf "$tmp/node.tar.xz" -C /opt/benchflow/node --strip-components=1 --no-same-owner; \
+    rm -rf "$tmp"; \
+    /opt/benchflow/node/bin/npm install -g --prefix /opt/benchflow/js-agents "$CODEX_ACP_PKG"; \
+    printf '%s\n' '#!/bin/sh' \
+        'exec /opt/benchflow/node/bin/node /opt/benchflow/js-agents/bin/codex-acp "$@"' \
+        > /opt/benchflow/bin/codex-acp; \
+    chmod +x /opt/benchflow/bin/codex-acp; \
+    chmod -R a+rX /opt/benchflow; \
+    test -x /opt/benchflow/node/bin/node; \
+    test -x /opt/benchflow/js-agents/bin/codex-acp; \
+    test -x /opt/benchflow/bin/codex-acp
 
 RUN mkdir -p /app /logs/verifier /logs/agent /logs/artifacts
 

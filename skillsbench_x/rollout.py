@@ -168,6 +168,152 @@ def jsonl_to_text(jsonl_path: Path) -> str:
     return "\n\n".join(out) + "\n"
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Codex native-session renderer
+#
+# codex-acp's ACP stream is lossy (read/search tool *results* and all reasoning
+# are dropped).  BenchFlow harvests codex's own native on-disk session jsonl out
+# of the sandbox (trajectory/codex_native_session.jsonl); this renderer turns
+# that richer format into the same judge-facing text blocks `jsonl_to_text`
+# produces.  Native schema is `{"type": "response_item"|..., "payload": {...}}`.
+# ──────────────────────────────────────────────────────────────────────────
+
+CODEX_NATIVE_PREAMBLE = (
+    "# Trajectory format note\n"
+    "This trajectory was extracted from codex's NATIVE on-disk session jsonl\n"
+    "(harvested from the sandbox), NOT the lossy codex-acp ACP stream.  It records\n"
+    "the full tool I/O the agent actually saw:\n"
+    "  - function_call         a tool invocation: `name` + full arguments (for\n"
+    "                          exec_command the shell command; for apply_patch the\n"
+    "                          patch body).\n"
+    "  - function_call_output  the FULL tool result (file contents, search hits,\n"
+    "                          command stdout/stderr), paired to its call by call_id.\n"
+    "  - assistant/user_message  agent messages and the user instruction.\n"
+    "Reasoning prose is NOT present: codex/GPT encrypts raw chain-of-thought and no\n"
+    "readable summary is emitted, so do not expect or require reasoning evidence.\n"
+)
+
+# Auto-injected context blocks (not real agent/user content) we skip.
+_CODEX_CONTEXT_PREFIXES = (
+    "<environment_context",
+    "<permissions",
+    "<skills_instructions",
+    "<plugins_instructions",
+    "<user_instructions",
+)
+
+
+def _codex_block_text(content) -> str:
+    """Flatten a codex message `content` (list of blocks, or str) to text,
+    dropping auto-injected <...> context blocks."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return json.dumps(content, ensure_ascii=False)
+    parts = []
+    for block in content:
+        if not isinstance(block, dict):
+            parts.append(str(block))
+            continue
+        text = block.get("text")
+        if not isinstance(text, str):
+            text = block.get("content") if isinstance(block.get("content"), str) else None
+        if text is None:
+            parts.append(json.dumps(block, ensure_ascii=False))
+            continue
+        if text.lstrip().startswith(_CODEX_CONTEXT_PREFIXES):
+            continue
+        parts.append(text)
+    return "\n".join(p for p in parts if p)
+
+
+def _render_codex_function_call(payload: dict, cap: int) -> list[str]:
+    name = payload.get("name", "") or ""
+    call_id = payload.get("call_id", "") or ""
+    raw_args = payload.get("arguments", "")
+    args = raw_args
+    if isinstance(raw_args, str):
+        try:
+            args = json.loads(raw_args)
+        except (json.JSONDecodeError, ValueError):
+            args = raw_args
+    if isinstance(args, dict):
+        cmd = args.get("cmd") or args.get("command")
+        if cmd is not None:
+            detail = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+        elif "input" in args:        # apply_patch
+            detail = str(args["input"])
+        elif "patch" in args:
+            detail = str(args["patch"])
+        else:
+            detail = json.dumps(args, ensure_ascii=False)
+    else:
+        detail = str(args)
+    return [
+        f"name:    {name}",
+        f"call_id: {call_id}",
+        f"args:    {_truncate(detail, cap)}",
+    ]
+
+
+def _render_codex_function_output(payload: dict, cap: int) -> list[str]:
+    call_id = payload.get("call_id", "") or ""
+    output = payload.get("output", "")
+    text = output if isinstance(output, str) else _codex_block_text(output)
+    return [
+        f"call_id: {call_id}",
+        f"output:  {_truncate(text, cap)}",
+    ]
+
+
+def codex_native_jsonl_to_text(jsonl_path: Path) -> str:
+    """Render codex's native session JSONL into readable text for the judge.
+
+    Walks `response_item` entries in order (the authoritative content stream):
+    messages (skipping developer/system + injected context), function_call, and
+    function_call_output (paired to their call by adjacency + call_id). Skips
+    `reasoning` (encrypted) and the duplicate `event_msg` UI stream.
+    """
+    if not jsonl_path.exists():
+        return ""
+    out: list[str] = [CODEX_NATIVE_PREAMBLE, ""]
+    n = 0
+    msg_cap = 16 * 1024
+    exec_cap = RESULT_CAP_BY_KIND["execute"]
+    with jsonl_path.open() as f:
+        for line in f:
+            line = line.rstrip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("type") != "response_item":
+                continue
+            p = ev.get("payload") or {}
+            ptype = p.get("type")
+            if ptype == "message":
+                role = p.get("role", "?")
+                if role == "developer":
+                    continue  # system instructions, not agent behavior
+                text = _codex_block_text(p.get("content", ""))
+                if not text.strip():
+                    continue
+                n += 1
+                out.append(f"[#{n} {role}_message]\n{_truncate(text, msg_cap)}")
+            elif ptype == "function_call":
+                n += 1
+                body = _render_codex_function_call(p, exec_cap)
+                out.append("\n".join([f"[#{n} function_call]", *body]))
+            elif ptype == "function_call_output":
+                n += 1
+                body = _render_codex_function_output(p, exec_cap)
+                out.append("\n".join([f"[#{n} function_call_output]", *body]))
+            # reasoning / other response_items: skip (encrypted / irrelevant)
+    return "\n\n".join(out) + "\n"
+
+
 def discover_tasks(tasks_arg: Path) -> list[Path]:
     if (tasks_arg / "task.toml").exists():
         return [tasks_arg]
@@ -252,6 +398,17 @@ def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
     trajectory_text = ""
     note = ""
     if rollout_dir is not None:
+        # Prefer codex's harvested native session (full tool calls + results)
+        # over the lossy codex-acp ACP trajectory.  BenchFlow only harvests this
+        # file for codex runs, so its presence is the harness signal.
+        native_codex_candidates = [
+            rollout_dir / "trajectory" / "codex_native_session.jsonl",
+            rollout_dir / "agent" / "codex_native_session.jsonl",
+        ]
+        native_codex = next(
+            (p for p in native_codex_candidates if p.exists() and p.stat().st_size > 0),
+            None,
+        )
         # ACP harness trajectory (codex-acp / claude-agent-acp / ...)
         traj_jsonl_candidates = [
             rollout_dir / "agent" / "acp_trajectory.jsonl",
@@ -262,7 +419,11 @@ def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
         transcript = rollout_dir / "agent" / "transcript.txt"
         oracle_txt = rollout_dir / "agent" / "oracle.txt"
 
-        if traj_jsonl is not None:
+        if native_codex is not None:
+            trajectory_text = codex_native_jsonl_to_text(native_codex)
+            note = f"normalized from {native_codex.relative_to(rollout_dir)} (codex native session)"
+            shutil.copy2(native_codex, out / "trajectory.jsonl")
+        elif traj_jsonl is not None:
             trajectory_text = jsonl_to_text(traj_jsonl)
             note = f"normalized from {traj_jsonl.relative_to(rollout_dir)}"
             shutil.copy2(traj_jsonl, out / "trajectory.jsonl")

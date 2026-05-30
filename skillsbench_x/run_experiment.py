@@ -14,17 +14,13 @@ Usage:
 
 See experiments/configs/skill-eval/group1-codex.yaml for the schema.
 
-Known issues
-------------
-* The aggregate stage currently crashes when ``aggregate.format: md`` is
-  set in the YAML: ``build_aggregate_cmd`` does ``cmd.append("--md")`` with
-  no value, but ``skillsbench_x/aggregate.py``'s argparse declares
-  ``--md PATH``.  Result: judging completes (grading_summary.json is
-  written), but no ``aggregate.md`` is produced and the orchestrator
-  reports row failure.  Workaround: invoke aggregation manually with
-  ``uv run python skillsbench_x/aggregate.py --grades grades/<id> --per-task``.
-  Fix candidate: ``cmd += ["--md", str(grade_dir / "aggregate.md")]``.
-  See docs/skill-eval-extension.md "Reasoning-effort sweeps" for details.
+Notes
+-----
+* ``aggregate.format: md``/``json`` emit a default output path under the grade
+  dir (``aggregate.md`` / ``aggregate.json``) when the YAML doesn't supply one,
+  so ``build_aggregate_cmd`` never leaves ``--md``/``--json`` valueless (which
+  previously swallowed the next flag and failed the aggregate stage).  Override
+  with ``aggregate.md_path`` / ``aggregate.json_path``.
 """
 
 from __future__ import annotations
@@ -108,17 +104,22 @@ def build_judge_cmd(row: dict, cfg: dict, run_id: str, grade_id: str) -> list[st
 
 
 def build_aggregate_cmd(row: dict, cfg: dict, grade_id: str) -> list[str]:
+    grade_dir = resolve(cfg.get("grades_root", "grades")) / grade_id
     cmd: list[str] = [
         sys.executable, str(SCRIPTS["aggregate"]),
-        "--grades", str(resolve(cfg.get("grades_root", "grades")) / grade_id),
+        "--grades", str(grade_dir),
     ]
     agg = cfg.get("aggregate", {})
     fmt = agg.get("format")
+    # aggregate.py's --md / --json both REQUIRE a path argument; emit a default
+    # under the grade dir when the YAML doesn't give one, so the flag is never
+    # left valueless (which would swallow the following flag and fail the stage).
     if fmt == "md":
-        cmd.append("--md")
+        out = agg.get("md_path")
+        cmd += ["--md", str(out) if out else str(grade_dir / "aggregate.md")]
     elif fmt == "json":
         out = agg.get("json_path")
-        cmd += ["--json"] if not out else ["--json", str(out)]
+        cmd += ["--json", str(out) if out else str(grade_dir / "aggregate.json")]
     if agg.get("per_task"):
         cmd.append("--per-task")
     return cmd

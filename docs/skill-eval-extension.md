@@ -13,10 +13,11 @@ All extension code is namespaced under `skillsbench_x/` and supporting layout:
 ```
 professional/skillsbench/
 ├── environment/
-│   └── Dockerfile.base                   # NEW shared base image (ubuntu + node + python + pytest + rg)
+│   └── Dockerfile.base                   # shared base image (ubuntu + node + python + pytest + rg;
+│                                         # pre-bakes BenchFlow node + codex-acp — see "Pre-baked agent")
 ├── skillsbench_x/                        # NEW extension package
 │   ├── cli.py                            # unified `skillsbench-x <rollout|judge|aggregate>` entry
-│   ├── rollout.py                        # BenchFlow-driven rollout with ACP→text normalizer
+│   ├── rollout.py                        # BenchFlow-driven rollout; ACP + codex-native → text normalizers
 │   ├── rollout_direct.py                 # fallback: drives `codex exec` directly (no Docker)
 │   ├── judge.py                          # LLM-as-judge driver, batched
 │   ├── aggregate.py                      # subprocess wrapper around analyze_grades.py
@@ -81,7 +82,9 @@ After data is ready (either by running `skill_eval/test_case_search/` end-to-end
 locally, or by cloning a prepackaged dataset from HuggingFace), the pipeline is:
 
 ```bash
-# 0) one-time: build the shared base image
+# 0) one-time: build the shared base image. It pre-bakes BenchFlow's isolated
+#    node + codex-acp, so the per-task "Installing codex-acp in sandbox" step
+#    becomes a no-op (no npm download per task). Rebuild when bumping codex-acp.
 docker build -f environment/Dockerfile.base -t skillsbench-base:latest environment/
 
 # 1) adapt HF flat-format dump → Harbor tasks/
@@ -221,7 +224,39 @@ safety rails:
    browse `/root/.{claude,agents}/skills/`, which is itself a graded behavior
    (rubric criterion: did the agent read SKILL.md).
 
-## ACP trajectory normalization — capabilities and limits
+## Trajectory normalization — capabilities and limits
+
+Two trajectory sources feed the judge, picked per harness in
+`rollout.py:run_one`:
+
+- **codex → native-session harvest** (full tool I/O). Default for the `codex`
+  harness as of 2026-05-30; see immediately below.
+- **claude-agent-acp / legacy codex-acp → ACP trajectory**, normalized by
+  `rollout.py:jsonl_to_text`.
+
+### Codex: native-session harvest (full tool I/O)  — added 2026-05-30
+
+`codex-acp`'s ACP event stream is lossy: empirically it drops tool *results*
+for `read`/`search` (only ~7/26 `tool_call`s carried `content` on a real run)
+and never emits reasoning. But the underlying `codex` core still writes a
+complete session JSONL to `$HOME/.codex/sessions/**/rollout-*.jsonl` *inside*
+the container. BenchFlow's `Rollout._harvest_codex_native_session` (local
+`feat/reasoning-effort` fork, in `cleanup()` before sandbox teardown) copies the
+newest one out to `trajectory/codex_native_session.jsonl`, and
+`rollout.py:codex_native_jsonl_to_text` renders it. `run_one` prefers this file
+over `acp_trajectory.jsonl` whenever it exists (only codex runs produce one).
+
+What the judge now sees for codex: every `function_call` (full arguments — the
+shell command, the `apply_patch` body) paired with its `function_call_output`
+(full stdout / file contents / search hits), plus the user + assistant messages.
+
+What it still does NOT see: **reasoning prose.** Codex/GPT encrypts raw
+chain-of-thought (`encrypted_content`) and emits no readable summary on this
+setup, so reasoning is intentionally omitted; the judge is told not to require
+it via `CODEX_NATIVE_PREAMBLE`. This is a hard OpenAI-side limit, not a capture
+gap — no codex path (CLI, ACP, or on-disk) exposes raw CoT.
+
+### ACP path (claude-agent-acp; legacy codex-acp)
 
 `rollout.py:jsonl_to_text` converts BenchFlow's `agent/acp_trajectory.jsonl`
 into a flat text the judge can read.
@@ -232,13 +267,15 @@ into a flat text the judge can read.
 - For `kind=execute` / `kind=edit`: `title` typically carries the FULL shell
   command or `apply_patch` heredoc, so the script's logic is graded directly.
 
-**What doesn't:**
-The `@zed-industries/codex-acp` wrapper (and currently `claude-agent-acp` per
-spot-check) never populates the ACP `content[]` array on `tool_call_update`
-events. BenchFlow's `acp/session.py:131` and `trajectories/_capture.py:38` are
-ready to receive it — the field is simply empty at the wire. Verified across
-41 events of a real codex-acp run and 28 events of a partial run; no event of
-any kind had non-empty `content`.
+**What doesn't (codex-acp ACP path only):**
+The `@zed-industries/codex-acp` wrapper populates the ACP `content[]` array only
+for some `execute` calls and leaves `read`/`search` empty (7/26 non-empty on a
+real run), and emits no reasoning — which is exactly why the codex harness now
+reads the native session instead (previous subsection). A re-check of
+`claude-agent-acp` found the opposite: it DOES populate `content[]` on every
+`tool_call` (65/65 on a real run) and emits `agent_thought` reasoning, so its
+ACP trajectory is already complete and claude-code stays on the ACP path
+unchanged.
 
 Consequence:
 - `kind=read`: you see *which file* was read, not its contents.
@@ -258,10 +295,40 @@ trajectory token-cost predictable.
 | codex-acp, no preamble   | 5/15    | -3 from missing `command_output` evidence |
 | codex-acp, w/ normalizer | 6/16    | preamble recovers PP-ACT-1; M5/M6/M7 still lost |
 
-The residual −2 to −3 gap is structural to codex-acp until the upstream
-wrapper populates `content`. **Cross-harness comparisons (codex-acp ↔
-claude-agent-acp) and within-harness comparisons (with-skills ↔ no-skills)
-remain fair**; direct codex scores are *not* comparable to codex-acp scores.
+The −2 to −3 gap shown above was structural to the old codex-**acp** path. The
+native-session harvest (2026-05-30) closes it: the judge now sees the same tool
+I/O the agent did, so codex scores recover toward the direct-codex reference.
+The table is kept for historical context (runs predating the harvest).
+**Cross-harness (codex ↔ claude-agent-acp) and within-harness (with-skills ↔
+no-skills) comparisons remain fair.**
+
+## Pre-baked agent in the base image — added 2026-05-30
+
+BenchFlow installs ACP agents at *runtime* into `/opt/benchflow` (one Node
+tarball + one `npm install @zed-industries/codex-acp@latest` per container).
+Because every task gets a fresh container, that download ran **once per task** —
+~1400× over a full group1+group2 × 4-effort × 2-row sweep — and with `@latest`
+it risked codex-acp version drift mid-sweep.
+
+`environment/Dockerfile.base` now pre-installs BenchFlow's isolated node +
+codex-acp at the exact paths the runtime guard checks
+(`/opt/benchflow/{node/bin/node, js-agents/bin/codex-acp, bin/codex-acp}`, from
+`benchflow.agents.registry`). The runtime install command is idempotent
+(`[ -x <agent_bin> ] || npm install …`), so it now no-ops instead of
+downloading. Pin the version via a build arg:
+
+```bash
+docker build -f environment/Dockerfile.base \
+  --build-arg CODEX_ACP_PKG=@zed-industries/codex-acp@<version> \
+  -t skillsbench-base:latest environment/
+```
+
+- **Rebuild the base image** for this to take effect; per-task images are
+  `FROM skillsbench-base:latest` and pick up the baked layer automatically.
+- **Safe by design:** if a baked path is ever wrong, the runtime guard just
+  falls back to downloading (old behavior) — it can't break a run.
+- Only `codex-acp` is baked (the harness in use). To speed up claude-code,
+  bake `@zed-industries/claude-agent-acp` the same way.
 
 ## Cost and concurrency
 
@@ -311,22 +378,33 @@ that surfaces it end-to-end:
 
 ### How to run a sweep
 
-Per-effort YAML configs live at
-`experiments/configs/skill-eval/codex-gpt5_5-{low,medium,high,xhigh}.yaml`.
-Each has a distinct `name:` so run_id/grade_id directories don't collide
-(`group1-codex-{effort}-codex-{with,no}`). The matrix rows pin
-`reasoning:` on both the with-skills and no-skills rows so the only
-varying axis within a single config is skill availability, not effort.
+Per-effort YAML configs live under `experiments/configs/skill-eval/`, one set
+per data group:
 
-One-shot driver:
+- group1 (tasks 1–89): `codex-gpt5_5-{low,medium,high,xhigh}.yaml`
+  (`name: group1-codex-{effort}`, `tasks_root: tasks_runtime/20260601-group1`)
+- group2 (tasks 90–181): `codex-gpt5_5-group2-{low,medium,high,xhigh}.yaml`
+  (`name: group2-codex-{effort}`, `tasks_root: tasks_runtime/20260602-group2`)
+
+Each has a distinct `name:` so run_id/grade_id directories don't collide
+(`{group}-codex-{effort}-codex-{with,no}`). Both matrix rows pin the same
+`reasoning:`, so the only varying axis within a single config is skill
+availability.
+
+One-shot driver — runs group1 then group2, all four efforts, and **both** the
+with-skills and no-skills rows:
 
 ```bash
 ./experiments/sweep-codex-gpt5_5-efforts.sh
 ```
 
-It tee's each effort's stdout to `runs/_sweep-<ts>/<effort>.log`, does NOT
-abort on per-effort failure (continues, summarizes rc at the end), and
-exits non-zero if any effort failed.
+It loops `(group, effort)` cells, runs `run_experiment.py --rows 0,1
+--keep-going` per cell, tee's each to `runs/_sweep-<ts>/<group>-<effort>.log`,
+does NOT abort on a cell failure (continues, prints an rc summary at the end),
+and exits non-zero if any cell failed. Written to stay bash-3.2 compatible
+(macOS `/bin/bash`): no associative arrays, and the group array is named
+`DATA_GROUPS` (not the reserved `GROUPS`, which bash keeps as the caller's unix
+group list and silently refuses to reassign).
 
 ### Known gotchas
 
@@ -339,19 +417,14 @@ exits non-zero if any effort failed.
    into the validator. The user's chosen 4-effort sweep is
    `low / medium / high / xhigh`, which dodges this.
 
-2. **`run_experiment.py`'s aggregate stage crashes.** The orchestrator
-   passes `cmd.append("--md")` with no value, but `aggregate.py`'s argparse
-   requires `--md <path>`. All four sweep runs hit
-   `aggregate.py: error: argument --md: expected one argument` — `judge`
-   succeeds and writes per-task phase JSONs, but no `aggregate.md` lands.
-   Workaround: invoke aggregation manually after the sweep:
-   ```bash
-   uv run python skillsbench_x/aggregate.py \
-     --grades grades/group1-codex-<eff>-codex-with--rev1 --per-task
-   ```
-   That prints the summary to stdout. Fix candidate (not landed yet): in
-   `run_experiment.py:build_aggregate_cmd`, change `cmd.append("--md")` to
-   `cmd += ["--md", str(grade_dir / "aggregate.md")]`.
+2. **`run_experiment.py`'s aggregate stage — FIXED 2026-05-30.** It used to
+   `cmd.append("--md")` with no value, but `aggregate.py` requires `--md
+   <path>`, so `--md` swallowed the following `--per-task` and the stage failed
+   (`error: argument --md: expected one argument`); `judge` still wrote per-task
+   phase JSONs but no `aggregate.md` landed. `build_aggregate_cmd` now emits
+   `--md <grade_dir>/aggregate.md` (and a default `--json` path when
+   `format: json`), overridable via `aggregate.md_path` / `aggregate.json_path`
+   in the YAML. The sweep produces `aggregate.md` cleanly.
 
 3. **`xhigh` was not part of the initial A/B**. Both `low` and `high` were
    end-to-end verified on task 11 (tool calls 6 → 10, agent_execution
