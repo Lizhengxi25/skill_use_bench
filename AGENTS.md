@@ -64,6 +64,8 @@ the `bench …` CLI are unchanged. The extension adds:
 ```
 environment/Dockerfile.base    # shared base image, every skill-eval task
                                # inherits with `FROM skillsbench-base:latest`
+environment/global_skills/     # 20 global skills baked into the base image;
+                               # always available regardless of --with-skills
 skillsbench_x/                 # extension package
   rollout.py                   # wraps `bench run` per task; normalizes ACP
                                # trajectory.jsonl → flat text on host
@@ -112,6 +114,11 @@ Defaults: `--harness codex` ⇒ `codex-acp / gpt-5.5`, `--harness claude-code` �
 into every harness-specific path (`.claude/skills`, `.agents/skills`,
 `.codex/skills`, `.opencode/skills`); `--with-skills`/omit toggles whether
 that flag is passed at all.
+
+The base image also bakes 20 **global skills** from `environment/global_skills/`
+into `/skills/`, symlinked to all agent discovery paths. These are always
+available regardless of `--with-skills`. When `--with-skills` is set, the
+task-specific skill is merged into `/skills/` alongside the global ones.
 
 Re-grade after rubric edits hits stages 3+4 only — `runs/` is preserved.
 

@@ -61,6 +61,14 @@ RUN set -eux; \
     test -x /opt/benchflow/js-agents/bin/codex-acp; \
     test -x /opt/benchflow/bin/codex-acp
 
+# ── Global skills (always available, regardless of --skills-dir) ─────────
+COPY global_skills /skills/
+RUN mkdir -p /root/.claude   && ln -sf /skills /root/.claude/skills   \
+ && mkdir -p /root/.agents   && ln -sf /skills /root/.agents/skills   \
+ && mkdir -p /root/.pi/agent && ln -sf /skills /root/.pi/agent/skills \
+ && mkdir -p /root/.gemini   && ln -sf /skills /root/.gemini/skills   \
+ && mkdir -p /root/.opencode && ln -sf /skills /root/.opencode/skills
+
 RUN mkdir -p /app /logs/verifier /logs/agent /logs/artifacts
 
 WORKDIR /app

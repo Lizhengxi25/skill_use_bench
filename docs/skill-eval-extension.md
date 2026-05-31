@@ -13,8 +13,10 @@ All extension code is namespaced under `skillsbench_x/` and supporting layout:
 ```
 professional/skillsbench/
 ├── environment/
-│   └── Dockerfile.base                   # shared base image (ubuntu + node + python + pytest + rg;
-│                                         # pre-bakes BenchFlow node + codex-acp — see "Pre-baked agent")
+│   ├── Dockerfile.base                   # shared base image (ubuntu + node + python + pytest + rg;
+│   │                                     # pre-bakes BenchFlow node + codex-acp — see "Pre-baked agent")
+│   └── global_skills/                    # 20 global skills baked into the base image;
+│                                         # always available regardless of --with-skills
 ├── skillsbench_x/                        # NEW extension package
 │   ├── cli.py                            # unified `skillsbench-x <rollout|judge|aggregate>` entry
 │   ├── rollout.py                        # BenchFlow-driven rollout; ACP + codex-native → text normalizers
@@ -83,8 +85,8 @@ locally, or by cloning a prepackaged dataset from HuggingFace), the pipeline is:
 
 ```bash
 # 0) one-time: build the shared base image. It pre-bakes BenchFlow's isolated
-#    node + codex-acp, so the per-task "Installing codex-acp in sandbox" step
-#    becomes a no-op (no npm download per task). Rebuild when bumping codex-acp.
+#    node + codex-acp and 20 global skills. Rebuild when bumping codex-acp or
+#    updating global skills.
 docker build -f environment/Dockerfile.base -t skillsbench-base:latest environment/
 
 # 1) adapt HF flat-format dump → Harbor tasks/
@@ -169,8 +171,10 @@ Set in `skillsbench_x/rollout.py:DEFAULT_HARNESS_*`. Override per run with
 BenchFlow symlinks the same skills dir to ALL agent-specific paths, so a single
 `--skills-dir` deploys correctly for any harness without env mutation.
 
-`--with-skills` decides whether the flag is passed at all. No-skills runs
-get a cleanly skill-less container — no `find -name .claude -delete` hacks.
+`--with-skills` decides whether the task-specific skill is injected.
+Both with-skills and no-skills runs see 20 **global skills** baked into the
+base image (from `environment/global_skills/`). When `--with-skills` is set,
+the task-specific skill is merged into `/skills/` alongside the globals.
 
 ## Per-task layout, mapped to factory output
 
@@ -329,6 +333,21 @@ docker build -f environment/Dockerfile.base \
   falls back to downloading (old behavior) — it can't break a run.
 - Only `codex-acp` is baked (the harness in use). To speed up claude-code,
   bake `@zed-industries/claude-agent-acp` the same way.
+
+## Global skills in the base image — added 2026-05-31
+
+`environment/global_skills/` contains 20 domain skills (article-writing,
+fact-checker, market-research, etc.) that are baked into the base image at
+`/skills/` and symlinked to all agent discovery paths (`/root/.claude/skills`,
+`/root/.agents/skills`, `/root/.pi/agent/skills`, `/root/.gemini/skills`,
+`/root/.opencode/skills`).
+
+These global skills are **always available** — both `--with-skills` and
+no-skills runs see them. When `--with-skills` is set, the per-task skill is
+merged into `/skills/` via Docker's `COPY` merge semantics (no name conflicts
+exist between global and task-specific skills).
+
+To update: edit `environment/global_skills/`, then rebuild the base image.
 
 ## Cost and concurrency
 
