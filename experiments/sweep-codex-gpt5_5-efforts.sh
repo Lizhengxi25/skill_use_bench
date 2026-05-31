@@ -22,6 +22,8 @@ set -o pipefail
 # Run from the skillsbench root regardless of where the script is invoked.
 cd "$(dirname "$0")/.."
 
+docker build -t skillsbench-base:latest -f environment/Dockerfile.base environment/
+
 DATA_GROUPS=(group1 group2)
 EFFORTS=(low medium high xhigh)
 

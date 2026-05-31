@@ -100,6 +100,10 @@ def build_judge_cmd(row: dict, cfg: dict, run_id: str, grade_id: str) -> list[st
         cmd += ["--concurrency", str(judge["concurrency"])]
     if judge.get("reasoning"):
         cmd += ["--reasoning", judge["reasoning"]]
+    # Default is re-judge + overwrite; opt into resume-on-crash with
+    # `judge.skip_existing: true` (leaves already-graded phases untouched).
+    if judge.get("skip_existing"):
+        cmd.append("--skip-existing")
     return cmd
 
 
@@ -254,7 +258,8 @@ def main() -> int:
                 print(f"\nABORT (use --keep-going to continue past row failures)")
                 return 1
 
-    print(f"\ndone. {len(matrix)} rows, {failed} failed.")
+    executed = sum(1 for i in range(len(matrix)) if row_filter is None or i in row_filter)
+    print(f"\ndone. {executed} rows executed (of {len(matrix)} total), {failed} failed.")
     return 1 if failed else 0
 
 

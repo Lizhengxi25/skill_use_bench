@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-PHASES = ("module_sequence", "post_processing", "skill_identification")
+PHASES = ("skill_identification", "module_sequence", "post_processing")
 
 
 # ---------------------------------------------------------------------------
@@ -248,9 +248,9 @@ def summarize(loaded: dict) -> dict:
     summary["per_task"] = [
         {
             "task_id": t["task_id"],
+            "skill_identification_norm": t["phases"]["skill_identification"]["norm"],
             "module_sequence_norm": t["phases"]["module_sequence"]["norm"],
             "post_processing_norm": t["phases"]["post_processing"]["norm"],
-            "skill_identification_norm": t["phases"]["skill_identification"]["norm"],
             "total_score": t["total_score"],
             "total_max": t["total_max"],
             "total_norm": t["total_norm"],
@@ -291,7 +291,7 @@ def print_per_task(summary: dict, out=sys.stdout, sort_by: str = "task") -> None
     p("")
     p(f"Per-task normalized scores ({len(rows)} tasks, sorted by {sort_by})")
     header = (
-        f"  {'task':>4}  {'mod_seq':>7}  {'post_pr':>7}  {'skill_id':>8}  "
+        f"  {'task':>4}  {'skill_id':>8}  {'mod_seq':>7}  {'post_pr':>7}  "
         f"{'total':>7}  {'gated':>7}  {'raw':>9}  {'crit':>4}"
     )
     p(header)
@@ -300,9 +300,9 @@ def print_per_task(summary: dict, out=sys.stdout, sort_by: str = "task") -> None
         deg_mark = "  (deg)" if r["degenerate"] else ""
         p(
             f"  {r['task_id']:>4}  "
+            f"{r['skill_identification_norm']:>8.3f}  "
             f"{r['module_sequence_norm']:>7.3f}  "
             f"{r['post_processing_norm']:>7.3f}  "
-            f"{r['skill_identification_norm']:>8.3f}  "
             f"{r['total_norm']:>7.3f}  "
             f"{r['gated_total_norm']:>7.3f}  "
             f"{r['total_score']:>3}/{r['total_max']:<3}  "
@@ -494,7 +494,7 @@ def _md_section(summary: dict, sort_by: str = "task") -> str:
     lines.append(f"## Per-task normalized scores ({len(rows)} tasks, sorted by {sort_by})")
     lines.append("")
     lines.append(
-        "| task | mod_seq | post_proc | skill_id | total_norm | gated_norm | raw | crit | notes |"
+        "| task | skill_id | mod_seq | post_proc | total_norm | gated_norm | raw | crit | notes |"
     )
     lines.append(
         "|---:|---:|---:|---:|---:|---:|:---:|:---:|:---|"
@@ -508,9 +508,9 @@ def _md_section(summary: dict, sort_by: str = "task") -> str:
         note = "; ".join(notes_bits)
         lines.append(
             f"| {r['task_id']} "
+            f"| {r['skill_identification_norm']:.3f} "
             f"| {r['module_sequence_norm']:.3f} "
             f"| {r['post_processing_norm']:.3f} "
-            f"| {r['skill_identification_norm']:.3f} "
             f"| {r['total_norm']:.3f} "
             f"| {r['gated_total_norm']:.3f} "
             f"| {r['total_score']}/{r['total_max']} "

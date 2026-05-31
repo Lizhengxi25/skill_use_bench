@@ -14,6 +14,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         jq \
         ripgrep \
         xz-utils \
+        build-essential \
+        unzip \
+        zip \
+        tree \
+        sqlite3 \
+        wget \
+        file \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --break-system-packages --no-cache-dir \
@@ -30,7 +37,7 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 # _BENCHFLOW_BIN_PREFIX) or the runtime guard won't recognize them.  Pin
 # CODEX_ACP_PKG to a concrete version for full run-to-run reproducibility.
 ARG BF_NODE_VERSION=22.14.0
-ARG CODEX_ACP_PKG=@zed-industries/codex-acp@latest
+ARG CODEX_ACP_PKG=@zed-industries/codex-acp@0.15.0
 RUN set -eux; \
     arch="$(uname -m)"; \
     case "$arch" in \

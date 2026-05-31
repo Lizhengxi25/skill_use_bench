@@ -36,19 +36,29 @@ def utcnow() -> str:
 
 def run_one_judge(grade_root: Path, task_id: str, phase: str,
                   rubric_md: Path, trajectory_src: Path,
-                  model_effort: str) -> tuple[str, str, int, str]:
+                  model_effort: str, skip_existing: bool = False) -> tuple[str, str, int, str]:
     task_grade_dir = grade_root / task_id
     task_grade_dir.mkdir(parents=True, exist_ok=True)
-
-    trajectory_dst = task_grade_dir / "trajectory.log"
-    if not trajectory_dst.exists():
-        shutil.copy2(trajectory_src, trajectory_dst)
 
     output_json = task_grade_dir / f"judge_phase_{phase}.json"
     agent_log = task_grade_dir / f"judge_phase_{phase}.agent.log"
 
-    if output_json.exists() and output_json.stat().st_size > 0:
+    # Default is re-judge + overwrite: rollouts get re-run and re-graded in
+    # place, so a previously-written grade is stale and must be replaced.
+    # `--skip-existing` (opt-in) keeps the old resume-on-crash behaviour.
+    if skip_existing and output_json.exists() and output_json.stat().st_size > 0:
         return task_id, phase, 0, "SKIP"
+
+    # Always refresh the trajectory copy.  A re-run rollout overwrites
+    # runs/<run_id>/<task>/trajectory.log, and the judge must score that latest
+    # trajectory — not a stale copy left in the grade dir by a previous grading.
+    trajectory_dst = task_grade_dir / "trajectory.log"
+    shutil.copy2(trajectory_src, trajectory_dst)
+
+    # Drop any stale grade up front so a failed/empty re-judge can't masquerade
+    # as a fresh result in grading_summary.json (which only checks presence+size).
+    if output_json.exists():
+        output_json.unlink()
 
     rubric_text = rubric_md.read_text()
     prompt = f"{JUDGE_PREAMBLE}\n\nGrading rubric:\n{rubric_text}"
@@ -93,6 +103,9 @@ def main() -> int:
     parser.add_argument("--grade-id", default=None)
     parser.add_argument("--tasks", default=None, help="comma-separated task IDs to limit to")
     parser.add_argument("--phases", default=None, help="comma-separated phases to limit to")
+    parser.add_argument("--skip-existing", action="store_true",
+                        help="resume mode: leave already-graded phases untouched. "
+                             "Default is to re-judge and overwrite every phase.")
     args = parser.parse_args()
 
     if not shutil.which("codex"):
@@ -144,7 +157,7 @@ def main() -> int:
     failures = 0
     with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
         futs = {
-            ex.submit(run_one_judge, grade_root, t, p, r, src, args.reasoning):
+            ex.submit(run_one_judge, grade_root, t, p, r, src, args.reasoning, args.skip_existing):
                 (t, p) for (t, p, r, src) in jobs
         }
         for fut in as_completed(futs):
