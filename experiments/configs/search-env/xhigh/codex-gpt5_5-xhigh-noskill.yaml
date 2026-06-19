@@ -4,8 +4,8 @@
 #     --config experiments/configs/search-env/xhigh/codex-gpt5_5-xhigh-noskill.yaml --only rollout
 
 name: search-env
-tasks_root: /l/users/zhengxi.li/tasks_runtime/search-env   # converter output (107 curated tasks)
-runs_root:  /l/users/zhengxi.li/trajectories               # -> .../search-env-codex-no-xhigh/
+tasks_root: tasks_runtime/search-env   # converter output (107 curated tasks)
+runs_root:  runs               # -> .../search-env-codex-no-xhigh/
 
 # Pre-query prompt for the NO-SKILL condition (sent verbatim before each query;
 # may differ from the other condition). NOT the OpenAI system prompt.
