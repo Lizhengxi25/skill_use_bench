@@ -22,7 +22,11 @@ set -o pipefail
 # Run from the skillsbench root regardless of where the script is invoked.
 cd "$(dirname "$0")/.."
 
-docker build -t skillsbench-base:latest -f environment/Dockerfile.base environment/
+# Build the base image only if it isn't already present. Under SLURM the bootstrap
+# loads it from a prebuilt tar (compute nodes may lack internet for apt/npm); on a
+# fresh login node this builds it. Force a rebuild with: podman rmi skillsbench-base:latest
+podman image exists skillsbench-base:latest \
+  || docker build -t skillsbench-base:latest -f environment/Dockerfile.base environment/
 
 DATA_GROUPS=(group1 group2)
 EFFORTS=(low medium high xhigh)

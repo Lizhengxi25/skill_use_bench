@@ -2,6 +2,14 @@
 
 Benchmark for evaluating how well AI agents use skills. 94 default task definitions, working toward 100+.
 
+> [!IMPORTANT]
+> **Debugging the `skillsbench_x` experiment harness:** never run an
+> `experiments/configs/skill-eval/*.yaml` (or `run_experiment.py` with one) just to debug —
+> they run every task × both skill variants and are far too slow. Iterate on ONE task with
+> `skillsbench_x/rollout.py` + `skillsbench_x/judge.py`. See [`CLAUDE.md`](CLAUDE.md) for the
+> exact single-task commands and [`docs/server-setup.md`](docs/server-setup.md) §F7 for the
+> server (SLURM/rootless-Podman) specifics.
+
 ## Commands
 
 ```bash

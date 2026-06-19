@@ -45,7 +45,7 @@ rollout:
   bench_extra_args: ["--sandbox-user", "none"]
 
 judge:
-  concurrency: 30   # judge is host-local; rate limit is the OpenAI API tier
+  concurrency: 40   # judge is host-local; rate limit is the OpenAI API tier
   reasoning: high
 
 aggregate:

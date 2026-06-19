@@ -1,0 +1,42 @@
+# One-click experiment config for the skill-eval pipeline (group_hard_300).
+# Driven by skillsbench_x/run_experiment.py.  Mirrors the codex-gpt5_5-group2-* series.
+#
+# Usage:
+#   python3 skillsbench_x/run_experiment.py --config experiments/configs/skill-eval/group_hard_300/codex-gpt5_5-xhigh.yaml --rows 0
+#
+# One per reasoning effort (low/medium/high/xhigh) so each run_id is distinct
+# under runs/ and grades/.  The reasoning: value on each row must match the slug.
+name: group_hard_300-codex-xhigh
+tasks_root: tasks_runtime/group_hard_300      # where the Harbor tasks live (ids 182..515)
+runs_root: runs                               # rollout artifacts (gitignored)
+grades_root: grades                           # judge artifacts (gitignored)
+
+# Bump rev and re-run with --only judge,aggregate after editing rubrics.
+rev: 1
+
+run_id_template:   "{name}-{harness}-{skills}"
+grade_id_template: "{run_id}--rev{rev}"
+
+# Experiment matrix.  Row 0 = with skills, row 1 = no skills.
+# sweep_hard.slurm runs --rows 0 (with-skill only).
+matrix:
+  - harness: codex
+    with_skills: true
+    model: gpt-5.5
+    reasoning: xhigh
+  - harness: codex
+    with_skills: false
+    model: gpt-5.5
+    reasoning: xhigh
+
+rollout:
+  concurrency: 10
+  bench_extra_args: ["--sandbox-user", "none"]
+
+judge:
+  concurrency: 40   # judge is host-local; rate limit is the OpenAI API tier
+  reasoning: high
+
+aggregate:
+  format: md
+  per_task: true

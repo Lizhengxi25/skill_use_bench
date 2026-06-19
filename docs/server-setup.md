@@ -176,6 +176,16 @@ codex exec --skip-git-repo-check "reply OK"    # 验证订阅可用
 - **rollout 无需额外操作**：benchflow 的 `SubscriptionAuth` 探测 `~/.codex/auth.json` 并逐 task
   上传进容器（`registry.py` 的 codex-acp 配置），codex-acp 直接用。所以宿主机配好这一份，
   judge（宿主机）+ rollout（容器）全覆盖。
+- ⚠️ **关键坑：环境里不能有 `OPENAI_API_KEY`。** 一旦 shell 里 `export OPENAI_API_KEY=...`（本机
+  在 `~/.bashrc` 里有），benchflow 会判定为 **API-key 鉴权**：它用 `{"OPENAI_API_KEY": "..."}`
+  **覆盖**掉容器里的 `~/.codex/auth.json`（而不是上传 OAuth 订阅 tokens）。codex-acp 于是拿这个
+  key 走 API 调 gpt-5.5，容器内模型调用直接失败 → `ACP error -32603: Internal error`（rollout
+  能连上 ACP、能 set_model，但一发 prompt 就挂）。判分（宿主机 `codex exec`）不受影响——它认
+  `auth.json` 的 OAuth，env 里的 key 会被忽略。
+  - 修复：跑 rollout 前 `unset OPENAI_API_KEY`。`slurm-podman-bootstrap.sh` 已在每个作业开头
+    `unset OPENAI_API_KEY BENCHFLOW_PROVIDER_API_KEY`；**登录节点交互式直接跑** rollout/run_experiment
+    时也要 unset（或把 `~/.bashrc` 里那行 `export OPENAI_API_KEY` 注释掉——本实验全程用订阅、不用
+    API key）。
 - 备选：服务器 `codex login` + 笔记本侧 `ssh -L 1455:localhost:1455 <user>@<server>`，浏览器在
   笔记本完成 OAuth。
 
@@ -222,6 +232,53 @@ skillsbench-base:latest`）/ `rubric/judge_phase_*.md` / `tests/`。实验 confi
 集群策略；且 `/scratch`（Podman 镜像/容器存储所在）常被定期清理，**基础镜像可能被清掉，需重建**。
 若集群要求在计算节点跑，需先确认计算节点上 rootless Podman + 用户 socket
 （`/run/user/$(id -u)/podman/podman.sock`）同样可用。→ 建议与集群管理确认。
+
+### F7. 在 SLURM 计算节点跑 rollout（已验证可行，2026-05）
+计算节点（如 `cscc-cpu-p` 的 `cn-*`）**无 systemd 用户会话**，与登录节点有三处关键差异，必须在
+作业开头补齐，否则 `sbatch` 提交的 rollout 会失败：
+
+1. **没有 `/run/user/$(id -u)`**（`XDG_RUNTIME_DIR`）→ podman 起不来
+   （`Failed to obtain podman configuration: lstat /run/user/<uid>`）。
+   对策：在作业里把 `XDG_RUNTIME_DIR` 指到节点本地 `$TMPDIR`，并手动起一个 `podman system service`
+   作为 compose provider 的 socket（`DOCKER_HOST`）。
+2. **镜像存储是节点本地的**（系统 `storage.conf` 的 `rootless_storage_path=/scratch/$USER/...`，
+   而 `/scratch` 每节点独立）→ 登录节点构建的 `skillsbench-base` 在计算节点上不存在；NFS 家目录又
+   不支持 overlay 的 xattr（`lsetxattr ... operation not supported`）。
+   对策：登录节点 `podman save` 成 tar 放到 NFS 家目录，作业里 `podman load` 进**节点本地** store
+   （用 `rootless_storage_path` 覆盖，**不是** `graphroot`——rootless 会忽略 `graphroot`）。
+3. **podman 往 stderr 打噪声**：podman-docker 壳的 `Emulate Docker CLI using podman` 横幅 +
+   无 systemd 会话时的 `Falling back to cgroupfs` 警告。benchflow 用 `stderr=STDOUT` 合并捕获
+   `pwd`（`rollout.py` 里 `agent_cwd`），噪声会污染容器工作目录 → ACP exec 的 `-w` 拿到垃圾 →
+   `crun: /app: command not found`。
+   对策（一次性、用户级、NFS 共享 `~/.config` 全节点生效）：
+   - `touch ~/.config/containers/nodocker`（静音横幅，`/usr/bin/docker` 壳会检查此标记文件）。
+   - `~/.config/containers/containers.conf` 的 `[engine]` 加 `cgroup_manager = "cgroupfs"`（静音警告）。
+   这两步已并入 `setup-server.sh`。
+4. **`_benchflow_jobs`（bind-mount 源）必须在本地盘，不能在 NFS。** rollout 收尾时 benchflow 会
+   `docker compose cp` 把 trajectory 拷进容器的 `/logs/agent/`（这是个 bind-mount，源就是
+   `_benchflow_jobs/.../agent/`）。podman cp 会保留宿主 uid 去 `lchown`，而**rootless podman 没法
+   对 bind-mount 的 NFS 文件 lchown** → `operation not permitted` → rollout 末尾报错（agent 其实已
+   跑完）。本仓库 `runs/` 在 NFS `/home`，所以原来 `jobs_dir = runs/<id>/<task>/_benchflow_jobs`
+   会触发。Mac 上 `runs/` 在本地盘故无此问题。
+   - 修复：`skillsbench_x/rollout.py` 已改成把 `jobs_dir` 放到本地 `$TMPDIR`
+     （`tempfile.gettempdir()`，可用 `SKILLSBENCH_JOBS_ROOT` 覆盖）；最终产物（`trajectory.log` /
+     `result.json` / `trajectory.jsonl` 等）照旧拷回 `runs/<id>/<task>/`（NFS 持久化）。
+     `run_experiment.py` 走同一 `rollout.py`，自动受益。
+5. **`--sandbox-user none`**（次要）：实验 config 的 `bench_extra_args` 已带，`try.sh` 也补了
+   `-- --sandbox-user none`（`rollout.py` 用 `argparse.REMAINDER`，额外 bench 参数要放 `--` 之后）。
+   与上面的 cp 报错无关，但保持与正式实验一致。
+
+落地：以上 1–2 由仓库根目录的 [`slurm-podman-bootstrap.sh`](../../slurm-podman-bootstrap.sh) 自动完成
+（被 `try.sh` / `experiments/sweep.slurm` 在作业开头 `source`）。一次性准备：
+```bash
+# 登录节点：把基础镜像存成 tar 放到 NFS（每次改 Dockerfile.base 后重做）
+podman save -o "$HOME/skillsbench-base.tar" localhost/skillsbench-base:latest
+```
+冒烟（计算节点）：先 `sbatch probe-compute-node.sh` 跑可行性探测（podman/compose/出网/基础镜像/
+compose build 六项全 PASS），再 `sbatch try.sh` 真跑单题。验收看 `runs/<id>/7/trajectory.log` 非空。
+
+> 计算节点 `cn-02` 实测：rootless podman + fuse-overlayfs + slirp4netns 出网均可用，宿主机与容器
+> 都能到达模型 API；`/scratch`≈`/tmp` 同一本地 XFS（~300G 余量）。pasta 缺失不影响（用 slirp4netns）。
 
 ---
 

@@ -1,0 +1,33 @@
+# jun_16_syn_50_data — curated subset (31): A(23 none) + B(8 setup.sh); C/D excluded
+# source: env_deploy_AB_list.md  |  generated for from_search_env.py --names-file
+3d-cv-labeling-2026
+Siberian-Shamanic-Navigation
+ai-cold-outreach
+analyzing-user-feedback
+anthropic-technical-deep-dive
+axiom-app-store-diag-1
+brewcode_plan
+claude-reflection
+deep-brainstorming
+defi-mev-battletest
+director-readiness-advisor
+ethicist-analyst
+evaluation-rubrics
+fp-check
+humanize-writing
+kill-criteria-exit-ramps
+managing-intelligence-lifecycle
+meta-cognition
+ppt-creator
+product-development
+product-led-sales
+prompt-engineer-toolkit-2
+query-builder
+revops-2
+scenario-analyzer
+self-improving-agent-3
+socratic-questioning
+software-design-philosophy
+system-architecture
+team-designer-1
+technical-clarity

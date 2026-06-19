@@ -23,6 +23,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -345,12 +346,23 @@ def locate_rollout_dir(jobs_dir: Path, task_id: str) -> Path | None:
 def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
             with_skills: bool, repo_root: Path,
             bench_extra_args: list[str],
-            reasoning_effort: str | None = None) -> tuple[str, int, str]:
+            reasoning_effort: str | None = None,
+            prompt_args: list[str] | None = None,
+            prompt_note: str = "",
+            capture_workspace: bool = False,
+            skip_verify: bool = False) -> tuple[str, int, str]:
     task_id = task_dir.name
     out = run_dir / task_id
     out.mkdir(parents=True, exist_ok=True)
 
-    jobs_dir = out / "_benchflow_jobs"
+    # benchflow bind-mounts dirs under jobs_dir into the container and then
+    # `docker compose cp`s files in preserving host ownership. Rootless Podman
+    # cannot lchown bind-mounted *NFS* files ("operation not permitted"), and this
+    # repo's runs/ lives on NFS (/home). Keep jobs_dir on LOCAL disk ($TMPDIR, e.g.
+    # the per-job /tmp on a SLURM node); the harvested artifacts below are copied
+    # into `out` (NFS) for persistence. Override the base with SKILLSBENCH_JOBS_ROOT.
+    jobs_root = Path(os.environ.get("SKILLSBENCH_JOBS_ROOT") or tempfile.gettempdir())
+    jobs_dir = jobs_root / "skillsbench-bfjobs" / run_dir.name / task_id
     if jobs_dir.exists():
         shutil.rmtree(jobs_dir)
     jobs_dir.mkdir(parents=True)
@@ -362,6 +374,9 @@ def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
         f"model\t{model or ''}\n"
         f"reasoning_effort\t{reasoning_effort or ''}\n"
         f"with_skills\t{with_skills}\n"
+        f"prompt\t{prompt_note}\n"
+        f"capture_workspace\t{capture_workspace}\n"
+        f"skip_verify\t{skip_verify}\n"
         f"task_dir\t{task_dir}\n"
         f"jobs_dir\t{jobs_dir}\n"
         f"started_at_utc\t{started_at}\n"
@@ -387,6 +402,11 @@ def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
         skills_dir = task_dir / "environment" / "skills"
         if skills_dir.exists():
             cmd += ["--skills-dir", str(skills_dir)]
+    cmd += list(prompt_args or [])
+    if capture_workspace:
+        cmd += ["--capture-workspace"]
+    if skip_verify:
+        cmd += ["--skip-verify"]
     cmd += bench_extra_args
 
     bench_log = out / "bench.log"
@@ -405,8 +425,13 @@ def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
             rollout_dir / "trajectory" / "codex_native_session.jsonl",
             rollout_dir / "agent" / "codex_native_session.jsonl",
         ]
+        # os.access(R_OK): under rootless Podman, files benchflow `docker compose cp`s
+        # back into the container's bind-mounted logs land owned by a container subuid
+        # (host uid 2649 maps to container 0, so "2649" -> a subuid) and are unreadable
+        # by the host harvester. Skip those and fall back to the host-written copy.
         native_codex = next(
-            (p for p in native_codex_candidates if p.exists() and p.stat().st_size > 0),
+            (p for p in native_codex_candidates
+             if p.exists() and p.stat().st_size > 0 and os.access(p, os.R_OK)),
             None,
         )
         # ACP harness trajectory (codex-acp / claude-agent-acp / ...)
@@ -415,7 +440,8 @@ def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
             rollout_dir / "trajectory" / "acp_trajectory.jsonl",
             rollout_dir / "agent" / "trajectory.jsonl",
         ]
-        traj_jsonl = next((p for p in traj_jsonl_candidates if p.exists() and p.stat().st_size > 0), None)
+        traj_jsonl = next((p for p in traj_jsonl_candidates
+                           if p.exists() and p.stat().st_size > 0 and os.access(p, os.R_OK)), None)
         transcript = rollout_dir / "agent" / "transcript.txt"
         oracle_txt = rollout_dir / "agent" / "oracle.txt"
 
@@ -434,9 +460,10 @@ def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
             trajectory_text = oracle_txt.read_text()
             note = "taken from agent/oracle.txt (oracle mode)"
 
-        for rel in ("result.json", "agent/transcript.txt", "verifier/reward.txt"):
+        for rel in ("result.json", "agent/transcript.txt", "verifier/reward.txt",
+                    "artifacts/workspace.tgz"):
             src = rollout_dir / rel
-            if src.exists():
+            if src.exists() and os.access(src, os.R_OK):
                 shutil.copy2(src, out / Path(rel).name)
 
     if not trajectory_text and rc == 0:
@@ -470,6 +497,22 @@ def main() -> int:
                              "agents whose AgentConfig declares reasoning_effort_flag "
                              "(currently codex-acp) accept it. Typos and "
                              "unsupported agents fail fast at rollout setup.")
+    parser.add_argument("--prompt", default=None,
+                        help="Text prepended before the task query "
+                             "(forwarded to `bench run --prompt-prefix`).")
+    parser.add_argument("--prompt-file", default=None,
+                        help="File whose contents are prepended before the task query "
+                             "(forwarded to `bench run --prompt-file`; wins over --prompt).")
+    parser.add_argument("--capture-workspace", action="store_true",
+                        help="Snapshot each agent's working dir (/app) to "
+                             "runs/<run>/<task>/workspace.tgz before the container is "
+                             "destroyed (forwarded to `bench run --capture-workspace`; "
+                             "excludes node_modules/.venv/.git/…).")
+    parser.add_argument("--skip-verify", action="store_true",
+                        help="Skip benchflow's verify phase (no-op test.sh + pre-verify "
+                             "hardening) — correct for rollout-only / external-judge runs, "
+                             "and avoids the harden `find /` 10s-timeout failure "
+                             "(forwarded to `bench run --skip-verify`).")
     parser.add_argument("--with-skills", action="store_true")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--runs-root", default="runs")
@@ -501,6 +544,19 @@ def main() -> int:
     if extra and extra[0] == "--":
         extra = extra[1:]
 
+    # Pre-query prompt (forwarded to `bench run`; file wins over inline text).
+    prompt_args: list[str] = []
+    prompt_note = ""
+    if args.prompt_file:
+        pf = Path(args.prompt_file).resolve()
+        if not pf.is_file():
+            sys.exit(f"--prompt-file not found: {pf}")
+        prompt_args = ["--prompt-file", str(pf)]
+        prompt_note = f"file:{pf}"
+    elif args.prompt:
+        prompt_args = ["--prompt-prefix", args.prompt]
+        prompt_note = "inline"
+
     run_id = args.run_id or (utcnow().replace(":", "").replace("-", "") + f"-{os.getpid()}")
     run_dir = Path(args.runs_root).resolve() / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -512,6 +568,9 @@ def main() -> int:
         "model": model,
         "reasoning_effort": reasoning_effort,
         "with_skills": args.with_skills,
+        "prompt": prompt_note,
+        "capture_workspace": args.capture_workspace,
+        "skip_verify": args.skip_verify,
         "task_ids": [t.name for t in task_dirs],
         "started_at_utc": utcnow(),
         "bench_extra_args": extra,
@@ -529,11 +588,17 @@ def main() -> int:
         futs = {
             ex.submit(run_one, t, run_dir, agent, model,
                       args.with_skills, repo_root, extra,
-                      reasoning_effort): t.name
+                      reasoning_effort, prompt_args, prompt_note,
+                      args.capture_workspace, args.skip_verify): t.name
             for t in task_dirs
         }
         for fut in as_completed(futs):
-            task_id, rc, note = fut.result()
+            # One task's unexpected exception must not abort the whole batch —
+            # log it as a failure and keep rolling out the remaining tasks.
+            try:
+                task_id, rc, note = fut.result()
+            except Exception as e:  # noqa: BLE001
+                task_id, rc, note = futs[fut], 1, f"EXCEPTION: {e!r}"
             tag = "OK" if rc == 0 else f"FAIL:{rc}"
             print(f"[{tag}] {task_id}" + (f"  ({note})" if note else ""))
             if rc != 0:

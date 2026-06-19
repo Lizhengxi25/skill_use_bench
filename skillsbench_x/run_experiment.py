@@ -73,9 +73,19 @@ def build_rollout_cmd(row: dict, cfg: dict, run_id: str) -> list[str]:
         cmd += ["--agent", row["agent"]]
     if row.get("reasoning"):
         cmd += ["--reasoning", row["reasoning"]]
+    # Pre-query prompt (config-level): file wins over inline. Forwarded to
+    # rollout.py → `bench run` → _resolve_prompts (prepended before the query).
+    if cfg.get("prompt_file"):
+        cmd += ["--prompt-file", str(resolve(cfg["prompt_file"]))]
+    elif cfg.get("prompt"):
+        cmd += ["--prompt", str(cfg["prompt"])]
     rollout = cfg.get("rollout", {})
     if rollout.get("concurrency"):
         cmd += ["--concurrency", str(rollout["concurrency"])]
+    if rollout.get("capture_workspace"):
+        cmd.append("--capture-workspace")
+    if rollout.get("skip_verify"):
+        cmd.append("--skip-verify")
 
     # Forward extra args to `bench run` after a `--` separator.
     extra = rollout.get("bench_extra_args") or []
@@ -136,6 +146,7 @@ def expand_row(row: dict, cfg: dict) -> tuple[str, str]:
         "harness":  row["harness"],
         "skills":   "with" if row.get("with_skills") else "no",
         "model":    (row.get("model") or "default").replace("/", "_"),
+        "reasoning": row.get("reasoning") or "default",
         "rev":      str(cfg.get("rev", 1)),
     }
     run_id = render_template(

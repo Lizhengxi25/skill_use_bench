@@ -157,9 +157,21 @@ else
 [engine]
 compose_providers = ["$COMPOSE_BIN"]
 compose_warning_logs = false
+# 计算节点无 systemd user session：强制 cgroupfs，避免 podman 往 stderr 打
+# "Falling back to cgroupfs" 警告（benchflow 合并 stderr→stdout 捕获 pwd，会污染 agent_cwd）。
+cgroup_manager = "cgroupfs"
 EOF
   c_ok "已写入 $CONTAINERS_CONF"
 fi
+# 即使 compose_providers 已存在，也补齐 cgroup_manager（旧配置可能没有）。
+if ! grep -qsE '^\s*cgroup_manager' "$CONTAINERS_CONF"; then
+  c_info "补齐 cgroup_manager = cgroupfs ..."
+  printf '\n# Added by setup-server.sh — 计算节点无 systemd session，强制 cgroupfs\ncgroup_manager = "cgroupfs"\n' >> "$CONTAINERS_CONF"
+fi
+# 静音 podman-docker 壳的 "Emulate Docker CLI using podman" 横幅（它走 stderr，
+# 会被 benchflow 合并进 pwd 输出污染 agent_cwd）。/usr/bin/docker 会检查这个标记文件。
+touch "$(dirname "$CONTAINERS_CONF")/nodocker" \
+  && c_ok "已创建 nodocker 标记（静音 docker 壳横幅）"
 # 自检
 if docker compose version >/dev/null 2>&1; then
   c_ok "docker compose 可用：$(docker compose version 2>/dev/null | head -1)"

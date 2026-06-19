@@ -42,7 +42,7 @@ matrix:
   #   with_skills: false
 
 rollout:
-  concurrency: 8
+  concurrency: 10
   # Forwarded verbatim to `bench run` after the `--` separator.
   # `--sandbox-user none` runs the agent as root in the container (matches the
   # earlier-validated smoke; switch to `agent` once we've vetted the non-root
@@ -50,7 +50,7 @@ rollout:
   bench_extra_args: ["--sandbox-user", "none"]
 
 judge:
-  concurrency: 30   # judge is host-local; rate limit is the OpenAI API tier
+  concurrency: 40   # judge is host-local; rate limit is the OpenAI API tier
   reasoning: high
 
 aggregate:

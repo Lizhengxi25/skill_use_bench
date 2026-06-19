@@ -82,8 +82,12 @@ def run_one_judge(grade_root: Path, task_id: str, phase: str,
         "--output-last-message", str(output_json),
         prompt,
     ]
+    # stdin=DEVNULL: `codex exec` appends stdin to the prompt when stdin isn't a
+    # TTY; without this it prints "Reading additional input from stdin..." and
+    # blocks forever (the prompt is already passed as an arg).
     with agent_log.open("ab") as lf:
-        proc = subprocess.run(cmd, cwd=task_grade_dir, stdout=lf, stderr=subprocess.STDOUT)
+        proc = subprocess.run(cmd, cwd=task_grade_dir, stdin=subprocess.DEVNULL,
+                              stdout=lf, stderr=subprocess.STDOUT)
     rc = proc.returncode
 
     ended_at = utcnow()
@@ -161,7 +165,12 @@ def main() -> int:
                 (t, p) for (t, p, r, src) in jobs
         }
         for fut in as_completed(futs):
-            task_id, phase, rc, status = fut.result()
+            # One task/phase's unexpected exception must not abort the whole batch.
+            try:
+                task_id, phase, rc, status = fut.result()
+            except Exception as e:  # noqa: BLE001
+                task_id, phase = futs[fut]
+                rc, status = 1, f"EXCEPTION: {e!r}"
             print(f"[{status}] {task_id}/{phase}")
             if rc != 0:
                 failures += 1

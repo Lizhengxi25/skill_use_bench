@@ -1,0 +1,23 @@
+# search-env rollout — NO-SKILL condition. codex / gpt-5.5 / reasoning=medium.
+# Rollout-only (no rubrics): run with `--only rollout`.
+#   uv run python3 skillsbench_x/run_experiment.py \
+#     --config experiments/configs/search-env/medium/codex-gpt5_5-medium-noskill.yaml --only rollout
+
+name: search-env
+tasks_root: /l/users/zhengxi.li/tasks_runtime/search-env   # converter output (107 curated tasks)
+runs_root:  /l/users/zhengxi.li/trajectories               # -> .../search-env-codex-no-medium/
+
+# Pre-query prompt for the NO-SKILL condition (sent verbatim before each query;
+# may differ from the other condition). NOT the OpenAI system prompt.
+prompt_file: experiments/configs/search-env/prompt-noskill.md
+
+run_id_template: "{name}-{harness}-{skills}-{reasoning}"     # -> search-env-codex-no-medium
+
+matrix:
+  - { harness: codex, model: gpt-5.5, reasoning: medium, with_skills: false }
+
+rollout:
+  concurrency: 10
+  capture_workspace: true   # snapshot each agent's /app -> runs/<run>/<task>/workspace.tgz
+  skip_verify: true         # rollout-only: skip benchflow verify (no real verifier; avoids harden find/ 10s timeout)
+  bench_extra_args: ["--sandbox-user", "none"]
