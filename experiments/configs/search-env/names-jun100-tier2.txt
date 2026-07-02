@@ -1,0 +1,15 @@
+# jun_16_syn_100_data — Tier-2 medium (13): 工具链经 setup.sh build 期安装 + 依赖预热
+# source: DIFFICULTY_REPORT.md (Tier 2) + env_deploy_tier2_C_plan.md
+advanced-ds-library
+auth-security
+azure-architecture-autopilot
+Bytecode-VM
+data-schema-knowledge-modeling
+database-architect-1
+full-stack-orchestration-full-stack-feature
+growing-outside-in-systems
+interpreters
+moai-1
+module-systems
+oauth2-authentication
+when-building-backend-api-orchestrate-api-development

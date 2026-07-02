@@ -17,7 +17,7 @@ matrix:
   - { harness: codex, model: gpt-5.5, reasoning: medium, with_skills: false }
 
 rollout:
-  concurrency: 10
+  concurrency: 8
   capture_workspace: true   # snapshot each agent's /app -> runs/<run>/<task>/workspace.tgz
   skip_verify: true         # rollout-only: skip benchflow verify (no real verifier; avoids harden find/ 10s timeout)
   bench_extra_args: ["--sandbox-user", "none"]

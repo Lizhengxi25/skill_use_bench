@@ -1,0 +1,5 @@
+# jun_16_syn_50_data — C-class (3): 工具链经 setup.sh build 期安装 + 依赖预热
+# source: env_deploy_AB_list.md (C 类) + env_deploy_tier2_C_plan.md
+typescript-ops
+designing-distributed-systems
+issue-review

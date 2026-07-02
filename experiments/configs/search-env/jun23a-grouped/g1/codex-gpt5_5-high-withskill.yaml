@@ -1,0 +1,24 @@
+# search-env-jun23a GROUPED rollout — GROUP 1 (20 tasks) — WITHSKILL — codex / gpt-5.5 / reasoning=high.
+# Group 1 is a 20-task slice of the 83 jun_23_syn_100_a_data A+B set (dedicated symlink tasks_root).
+# Rollout-only (no rubrics): always run with `--only rollout`.
+# OUTPUT (organized, NOT flat): runs/search-env-jun23a/g1/high-withskill/<task>/
+#   uv run python3 skillsbench_x/run_experiment.py --config experiments/configs/search-env/jun23a-grouped/g1/codex-gpt5_5-high-withskill.yaml --only rollout
+
+name: search-env-jun23a
+tasks_root: tasks_runtime/search-env-jun23a-g1     # group 1: 20 tasks
+runs_root:  runs/search-env-jun23a/g1              # -> runs/search-env-jun23a/g1/high-withskill/
+
+prompt_file: experiments/configs/search-env/prompt-withskill.md
+
+# run_id is just "{reasoning}-{skills}skill" (effort + arm); the group lives in runs_root above,
+# so trajectories land neatly under one tree: runs/search-env-jun23a/g1/<effort>-<arm>/
+run_id_template: "{reasoning}-{skills}skill"     # -> high-withskill
+
+matrix:
+  - { harness: codex, model: gpt-5.5, reasoning: high, with_skills: true }
+
+rollout:
+  concurrency: 20
+  capture_workspace: true   # snapshot each agent's /app -> runs/<run>/<task>/workspace.tgz
+  skip_verify: true         # rollout-only: skip benchflow verify (no real verifier)
+  bench_extra_args: ["--sandbox-user", "none"]
