@@ -176,6 +176,11 @@ codex exec --skip-git-repo-check "reply OK"    # 验证订阅可用
 - **rollout 无需额外操作**：benchflow 的 `SubscriptionAuth` 探测 `~/.codex/auth.json` 并逐 task
   上传进容器（`registry.py` 的 codex-acp 配置），codex-acp 直接用。所以宿主机配好这一份，
   judge（宿主机）+ rollout（容器）全覆盖。
+- **codex-acp rollout 必须固定 `sandbox_mode=workspace-write`。** 这些任务需要在 `/app` 下写
+  输出文件；如果 Codex/ACP 默认进了 `read-only`，会出现 prompt 后 0 tool call、
+  native session 里 `sandbox_policy.type=read-only`、`last_agent_message=null`，外层表现为
+  `ACP error -32603: Internal error`。BenchFlow 的 `codex-acp` launch config 已显式加
+  `-c sandbox_mode=workspace-write`，不要移除。
 - ⚠️ **关键坑：环境里不能有 `OPENAI_API_KEY`。** 一旦 shell 里 `export OPENAI_API_KEY=...`（本机
   在 `~/.bashrc` 里有），benchflow 会判定为 **API-key 鉴权**：它用 `{"OPENAI_API_KEY": "..."}`
   **覆盖**掉容器里的 `~/.codex/auth.json`（而不是上传 OAuth 订阅 tokens）。codex-acp 于是拿这个
