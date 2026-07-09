@@ -27,17 +27,18 @@ RUN pip3 install --break-system-packages --no-cache-dir \
         pytest==8.4.1 \
         pytest-json-ctrf==0.3.5
 
-# ── Pre-bake BenchFlow's isolated Node + codex-acp agent ───────────────────
+# ── Pre-bake BenchFlow's isolated Node + JS ACP agents ─────────────────────
 # BenchFlow installs ACP agents at *runtime* into /opt/benchflow (see
 # benchflow.agents.registry).  Its install command is idempotent — it skips the
 # download whenever the target binaries already exist — so baking them here turns
-# the per-task "Installing codex-acp in sandbox" step into a no-op and avoids one
+# the per-task "Installing <agent> in sandbox" step into a no-op and avoids one
 # Node tarball + one npm download *per task* (~1400× over a full sweep).  Paths
 # MUST match registry.py (_BENCHFLOW_NODE_PREFIX / _BENCHFLOW_JS_AGENT_PREFIX /
-# _BENCHFLOW_BIN_PREFIX) or the runtime guard won't recognize them.  Pin
-# CODEX_ACP_PKG to a concrete version for full run-to-run reproducibility.
+# _BENCHFLOW_BIN_PREFIX) or the runtime guard won't recognize them.  Pin package
+# args to concrete versions for full run-to-run reproducibility.
 ARG BF_NODE_VERSION=22.14.0
 ARG CODEX_ACP_PKG=@zed-industries/codex-acp@0.15.0
+ARG CLAUDE_AGENT_ACP_PKG=@zed-industries/claude-agent-acp@latest
 RUN set -eux; \
     arch="$(uname -m)"; \
     case "$arch" in \
@@ -51,15 +52,21 @@ RUN set -eux; \
         "https://nodejs.org/dist/v${BF_NODE_VERSION}/node-v${BF_NODE_VERSION}-linux-${node_arch}.tar.xz"; \
     tar -xJf "$tmp/node.tar.xz" -C /opt/benchflow/node --strip-components=1 --no-same-owner; \
     rm -rf "$tmp"; \
-    /opt/benchflow/node/bin/npm install -g --prefix /opt/benchflow/js-agents "$CODEX_ACP_PKG"; \
+    /opt/benchflow/node/bin/npm install -g --prefix /opt/benchflow/js-agents "$CODEX_ACP_PKG" "$CLAUDE_AGENT_ACP_PKG"; \
     printf '%s\n' '#!/bin/sh' \
         'exec /opt/benchflow/node/bin/node /opt/benchflow/js-agents/bin/codex-acp "$@"' \
         > /opt/benchflow/bin/codex-acp; \
+    printf '%s\n' '#!/bin/sh' \
+        'exec /opt/benchflow/node/bin/node /opt/benchflow/js-agents/bin/claude-agent-acp "$@"' \
+        > /opt/benchflow/bin/claude-agent-acp; \
     chmod +x /opt/benchflow/bin/codex-acp; \
+    chmod +x /opt/benchflow/bin/claude-agent-acp; \
     chmod -R a+rX /opt/benchflow; \
     test -x /opt/benchflow/node/bin/node; \
     test -x /opt/benchflow/js-agents/bin/codex-acp; \
-    test -x /opt/benchflow/bin/codex-acp
+    test -x /opt/benchflow/js-agents/bin/claude-agent-acp; \
+    test -x /opt/benchflow/bin/codex-acp; \
+    test -x /opt/benchflow/bin/claude-agent-acp
 
 # ── Global skills (always available, regardless of --skills-dir) ─────────
 COPY global_skills /skills/

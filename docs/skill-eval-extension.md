@@ -14,7 +14,7 @@ All extension code is namespaced under `skillsbench_x/` and supporting layout:
 professional/skillsbench/
 ├── environment/
 │   ├── Dockerfile.base                   # shared base image (ubuntu + node + python + pytest + rg;
-│   │                                     # pre-bakes BenchFlow node + codex-acp — see "Pre-baked agent")
+│   │                                     # pre-bakes BenchFlow node + JS ACP agents — see "Pre-baked agent")
 │   └── global_skills/                    # 20 global skills baked into the base image;
 │                                         # always available regardless of --with-skills
 ├── skillsbench_x/                        # NEW extension package
@@ -85,8 +85,8 @@ locally, or by cloning a prepackaged dataset from HuggingFace), the pipeline is:
 
 ```bash
 # 0) one-time: build the shared base image. It pre-bakes BenchFlow's isolated
-#    node + codex-acp and 20 global skills. Rebuild when bumping codex-acp or
-#    updating global skills.
+#    node, codex-acp, claude-agent-acp, and 20 global skills. Rebuild when
+#    bumping JS ACP agent packages or updating global skills.
 docker build -f environment/Dockerfile.base -t skillsbench-base:latest environment/
 
 # 1) adapt HF flat-format dump → Harbor tasks/
@@ -154,6 +154,9 @@ A matrix row's `reasoning:` field is forwarded to BenchFlow as
 codex-acp adapter honors it today, courtesy of the local
 `feat/reasoning-effort` patch.
 
+Do not set `reasoning:` for `claude-code` rows unless the selected BenchFlow
+agent declares a `reasoning_effort_flag`; unsupported agents fail fast.
+
 `uv run` is needed because pyyaml lives in the project venv; the underlying
 rollout/judge/aggregate scripts are stdlib-only and can still be invoked
 directly with `python3`.
@@ -170,6 +173,38 @@ Set in `skillsbench_x/rollout.py:DEFAULT_HARNESS_*`. Override per run with
 
 BenchFlow symlinks the same skills dir to ALL agent-specific paths, so a single
 `--skills-dir` deploys correctly for any harness without env mutation.
+
+MiniMax through Claude Code is selected as a provider-prefixed model, not a new
+harness:
+
+```bash
+MINIMAX_API_KEY=... python3 skillsbench_x/rollout.py \
+  --tasks tasks_runtime/20260601-g1 \
+  --harness claude-code \
+  --model minimax/MiniMax-M3 \
+  --run-id 20260601-minimax \
+  -- --sandbox-user none
+```
+
+BenchFlow maps `minimax/<model>` to MiniMax's Anthropic-compatible endpoint and
+passes the stripped model id to Claude Code as `ANTHROPIC_MODEL`.
+
+OpenRouter through Claude Code is also selected as a provider-prefixed model:
+
+```bash
+OPENROUTER_API_KEY=... python3 skillsbench_x/rollout.py \
+  --tasks tasks_runtime/20260601-g1 \
+  --harness claude-code \
+  --model openrouter/~anthropic/claude-sonnet-latest \
+  --run-id 20260601-openrouter \
+  -- --sandbox-user none
+```
+
+BenchFlow maps `openrouter/<model-slug>` to OpenRouter's Claude Code endpoint
+(`https://openrouter.ai/api`), passes the stripped slug as the model, sets
+`ANTHROPIC_AUTH_TOKEN` from `OPENROUTER_API_KEY`, and clears
+`ANTHROPIC_API_KEY` for that provider so official Anthropic keys do not
+conflict.
 
 `--with-skills` decides whether the task-specific skill is injected.
 Both with-skills and no-skills runs see 20 **global skills** baked into the
@@ -309,21 +344,22 @@ no-skills) comparisons remain fair.**
 ## Pre-baked agent in the base image — added 2026-05-30
 
 BenchFlow installs ACP agents at *runtime* into `/opt/benchflow` (one Node
-tarball + one `npm install @zed-industries/codex-acp@latest` per container).
+tarball + one npm install for the requested JS ACP agent per container).
 Because every task gets a fresh container, that download ran **once per task** —
 ~1400× over a full group1+group2 × 4-effort × 2-row sweep — and with `@latest`
 it risked codex-acp version drift mid-sweep.
 
-`environment/Dockerfile.base` now pre-installs BenchFlow's isolated node +
-codex-acp at the exact paths the runtime guard checks
-(`/opt/benchflow/{node/bin/node, js-agents/bin/codex-acp, bin/codex-acp}`, from
+`environment/Dockerfile.base` now pre-installs BenchFlow's isolated node,
+`codex-acp`, and `claude-agent-acp` at the exact paths the runtime guard checks
+(`/opt/benchflow/{node/bin/node, js-agents/bin/<agent>, bin/<agent>}`, from
 `benchflow.agents.registry`). The runtime install command is idempotent
 (`[ -x <agent_bin> ] || npm install …`), so it now no-ops instead of
-downloading. Pin the version via a build arg:
+downloading. Pin versions via build args:
 
 ```bash
 docker build -f environment/Dockerfile.base \
   --build-arg CODEX_ACP_PKG=@zed-industries/codex-acp@<version> \
+  --build-arg CLAUDE_AGENT_ACP_PKG=@zed-industries/claude-agent-acp@<version> \
   -t skillsbench-base:latest environment/
 ```
 
@@ -331,8 +367,6 @@ docker build -f environment/Dockerfile.base \
   `FROM skillsbench-base:latest` and pick up the baked layer automatically.
 - **Safe by design:** if a baked path is ever wrong, the runtime guard just
   falls back to downloading (old behavior) — it can't break a run.
-- Only `codex-acp` is baked (the harness in use). To speed up claude-code,
-  bake `@zed-industries/claude-agent-acp` the same way.
 
 ## Global skills in the base image — added 2026-05-31
 
