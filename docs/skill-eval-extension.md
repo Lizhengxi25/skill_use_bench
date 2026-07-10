@@ -206,6 +206,39 @@ BenchFlow maps `openrouter/<model-slug>` to OpenRouter's Claude Code endpoint
 `ANTHROPIC_API_KEY` for that provider so official Anthropic keys do not
 conflict.
 
+MiniMax-M3 can also run with Codex as the harness through either MiniMax's
+official Responses API or OpenRouter's Responses API:
+
+```bash
+# MiniMax official API (China endpoint by default).
+MINIMAX_API_KEY=... python3 skillsbench_x/rollout.py \
+  --tasks tasks_runtime/20260601-g1 \
+  --harness codex \
+  --model minimax/MiniMax-M3 \
+  --run-id 20260601-codex-minimax \
+  -- --sandbox-user none
+
+# MiniMax through OpenRouter.
+OPENROUTER_API_KEY=... python3 skillsbench_x/rollout.py \
+  --tasks tasks_runtime/20260601-g1 \
+  --harness codex \
+  --model openrouter/minimax/minimax-m3 \
+  --run-id 20260601-codex-openrouter-minimax \
+  -- --sandbox-user none
+```
+
+BenchFlow configures a named Codex provider with `wire_api=responses`, writes
+the MiniMax-M3 Codex model catalog into the sandbox, and keeps inherited
+OpenAI credentials out of both routes. When `--reasoning` is omitted,
+`skillsbench_x/rollout.py` uses `high`, which enables MiniMax-M3 Adaptive
+Thinking. MiniMax accepts `minimal`, `low`, `medium`, and `high` as equivalent
+thinking-on values; they are not reasoning-depth tiers, and `xhigh` is not a
+MiniMax Responses API value. Pass `--reasoning none` to disable M3 thinking.
+
+For an international MiniMax key, set
+`BENCHFLOW_PROVIDER_BASE_URL=https://api.minimax.io/v1`; the default direct
+endpoint is `https://api.minimaxi.com/v1` for China keys.
+
 `--with-skills` decides whether the task-specific skill is injected.
 Both with-skills and no-skills runs see 20 **global skills** baked into the
 base image (from `environment/global_skills/`). When `--with-skills` is set,

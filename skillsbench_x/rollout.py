@@ -38,6 +38,25 @@ DEFAULT_HARNESS_MODEL = {
     "codex": "gpt-5.5",
 }
 
+MINIMAX_CODEX_DEFAULT_REASONING = "high"
+
+
+def is_minimax_model(model: str) -> bool:
+    """Return whether a provider-qualified model selects MiniMax."""
+    normalized = model.strip().lower()
+    return (normalized.startswith("minimax/")
+            or normalized.startswith("openrouter/minimax/"))
+
+
+def resolve_reasoning_effort(agent: str, model: str,
+                             requested: str | None) -> str | None:
+    """Resolve the actual reasoning value independently from run labels."""
+    if requested is not None:
+        return requested
+    if agent == "codex-acp" and is_minimax_model(model):
+        return MINIMAX_CODEX_DEFAULT_REASONING
+    return None
+
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -492,11 +511,12 @@ def main() -> int:
                         help="Override BenchFlow agent name (default chosen from --harness)")
     parser.add_argument("--model", default=None)
     parser.add_argument("--reasoning", default=None,
-                        help="Reasoning effort (minimal/low/medium/high/xhigh). "
+                        help="Reasoning effort (none/minimal/low/medium/high/xhigh). "
                              "Forwarded to `bench run --reasoning-effort`; only "
                              "agents whose AgentConfig declares reasoning_effort_flag "
-                             "(currently codex-acp) accept it. Typos and "
-                             "unsupported agents fail fast at rollout setup.")
+                             "(currently codex-acp) accept it. MiniMax through Codex "
+                             "defaults to high (Adaptive Thinking) when omitted. Typos "
+                             "and unsupported agents fail fast at rollout setup.")
     parser.add_argument("--prompt", default=None,
                         help="Text prepended before the task query "
                              "(forwarded to `bench run --prompt-prefix`).")
@@ -539,7 +559,7 @@ def main() -> int:
 
     agent = args.agent or DEFAULT_HARNESS_AGENT[args.harness]
     model = args.model or DEFAULT_HARNESS_MODEL[args.harness]
-    reasoning_effort = args.reasoning
+    reasoning_effort = resolve_reasoning_effort(agent, model, args.reasoning)
     extra = list(args.bench_extra_args or [])
     if extra and extra[0] == "--":
         extra = extra[1:]
