@@ -463,6 +463,13 @@ def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
                            if p.exists() and p.stat().st_size > 0 and os.access(p, os.R_OK)), None)
         transcript = rollout_dir / "agent" / "transcript.txt"
         oracle_txt = rollout_dir / "agent" / "oracle.txt"
+        # BenchFlow writes non-protocol stdout and the separately drained stderr
+        # beside the ACP agent.  jobs_dir intentionally lives on local scratch,
+        # so harvest both logs into the persistent run leaf just like result.json.
+        agent_log = rollout_dir / "agent" / f"{agent.replace('-', '_')}.txt"
+        agent_stderr_log = agent_log.with_name(
+            f"{agent_log.stem}.stderr{agent_log.suffix}"
+        )
 
         if native_codex is not None:
             trajectory_text = codex_native_jsonl_to_text(native_codex)
@@ -484,6 +491,9 @@ def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
             src = rollout_dir / rel
             if src.exists() and os.access(src, os.R_OK):
                 shutil.copy2(src, out / Path(rel).name)
+        for src in (agent_log, agent_stderr_log):
+            if src.exists() and os.access(src, os.R_OK):
+                shutil.copy2(src, out / src.name)
 
     if not trajectory_text and rc == 0:
         note = "WARNING: rollout completed but no trajectory artifact found"
