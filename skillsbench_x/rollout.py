@@ -38,24 +38,10 @@ DEFAULT_HARNESS_MODEL = {
     "codex": "gpt-5.5",
 }
 
-MINIMAX_CODEX_DEFAULT_REASONING = "high"
-
-
-def is_minimax_model(model: str) -> bool:
-    """Return whether a provider-qualified model selects MiniMax."""
-    normalized = model.strip().lower()
-    return (normalized.startswith("minimax/")
-            or normalized.startswith("openrouter/minimax/"))
-
-
 def resolve_reasoning_effort(agent: str, model: str,
                              requested: str | None) -> str | None:
-    """Resolve the actual reasoning value independently from run labels."""
-    if requested is not None:
-        return requested
-    if agent == "codex-acp" and is_minimax_model(model):
-        return MINIMAX_CODEX_DEFAULT_REASONING
-    return None
+    """Return the explicitly requested reasoning value without model-specific defaults."""
+    return requested
 
 
 def utcnow() -> str:
@@ -524,9 +510,9 @@ def main() -> int:
                         help="Reasoning effort (none/minimal/low/medium/high/xhigh). "
                              "Forwarded to `bench run --reasoning-effort`; only "
                              "agents whose AgentConfig declares reasoning_effort_flag "
-                             "(currently codex-acp) accept it. MiniMax through Codex "
-                             "defaults to high (Adaptive Thinking) when omitted. Typos "
-                             "and unsupported agents fail fast at rollout setup.")
+                             "(currently codex-acp) accept it. When omitted, no "
+                             "`--reasoning-effort` flag is passed. Typos and unsupported "
+                             "agents fail fast at rollout setup.")
     parser.add_argument("--prompt", default=None,
                         help="Text prepended before the task query "
                              "(forwarded to `bench run --prompt-prefix`).")
