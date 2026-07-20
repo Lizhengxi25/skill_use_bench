@@ -38,7 +38,7 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 # args to concrete versions for full run-to-run reproducibility.
 ARG BF_NODE_VERSION=22.14.0
 ARG CODEX_ACP_PKG=@zed-industries/codex-acp@0.15.0
-ARG CLAUDE_AGENT_ACP_PKG=@zed-industries/claude-agent-acp@latest
+ARG CLAUDE_AGENT_ACP_PKG=@zed-industries/claude-agent-acp@0.23.1
 RUN set -eux; \
     arch="$(uname -m)"; \
     case "$arch" in \

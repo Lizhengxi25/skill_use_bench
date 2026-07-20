@@ -348,6 +348,44 @@ def locate_rollout_dir(jobs_dir: Path, task_id: str) -> Path | None:
     return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
+def normalize_rootless_podman_ownership(jobs_dir: Path) -> None:
+    """Map rootless container-owned rollout artifacts back to the host user.
+
+    Best-effort by design: this is cleanup, and a repair hiccup must never
+    fail a rollout whose agent run succeeded (a raising version once masked
+    every real error in a batch behind the same RuntimeError).
+    """
+    if not os.environ.get("CONTAINERS_STORAGE_CONF"):
+        return
+    podman = shutil.which("podman")
+    if podman is None:
+        print(
+            f"[warn] podman unavailable; skipping ownership repair for {jobs_dir}",
+            file=sys.stderr, flush=True,
+        )
+        return
+    try:
+        proc = subprocess.run(
+            [podman, "unshare", "chown", "-R", "0:0", str(jobs_dir)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        print(
+            f"[warn] podman ownership repair timed out for {jobs_dir}",
+            file=sys.stderr, flush=True,
+        )
+        return
+    if proc.returncode != 0:
+        print(
+            f"[warn] podman ownership repair failed for {jobs_dir}: "
+            f"{(proc.stderr or '').strip()}",
+            file=sys.stderr, flush=True,
+        )
+
+
 def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
             with_skills: bool, repo_root: Path,
             bench_extra_args: list[str],
@@ -359,6 +397,20 @@ def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
     task_id = task_dir.name
     out = run_dir / task_id
     out.mkdir(parents=True, exist_ok=True)
+    agent_log_stem = agent.replace("-", "_")
+    for managed_name in {
+        "agent_stderr.log",
+        f"{agent_log_stem}.stderr.txt",
+        f"{agent_log_stem}.txt",
+        "exit_code.txt",
+        "result.json",
+        "reward.txt",
+        "trajectory.jsonl",
+        "trajectory.log",
+        "transcript.txt",
+        "workspace.tgz",
+    }:
+        (out / managed_name).unlink(missing_ok=True)
 
     # benchflow bind-mounts dirs under jobs_dir into the container and then
     # `docker compose cp`s files in preserving host ownership. Rootless Podman
@@ -369,6 +421,7 @@ def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
     jobs_root = Path(os.environ.get("SKILLSBENCH_JOBS_ROOT") or tempfile.gettempdir())
     jobs_dir = jobs_root / "skillsbench-bfjobs" / run_dir.name / task_id
     if jobs_dir.exists():
+        normalize_rootless_podman_ownership(jobs_dir)
         shutil.rmtree(jobs_dir)
     jobs_dir.mkdir(parents=True)
 
@@ -418,6 +471,8 @@ def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
     with bench_log.open("wb") as lf:
         proc = subprocess.run(cmd, cwd=repo_root, stdout=lf, stderr=subprocess.STDOUT)
     rc = proc.returncode
+
+    normalize_rootless_podman_ownership(jobs_dir)
 
     rollout_dir = locate_rollout_dir(jobs_dir, task_id)
     trajectory_text = ""
