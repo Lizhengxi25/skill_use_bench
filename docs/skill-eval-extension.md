@@ -206,6 +206,31 @@ BenchFlow maps `openrouter/<model-slug>` to OpenRouter's Claude Code endpoint
 `ANTHROPIC_API_KEY` for that provider so official Anthropic keys do not
 conflict.
 
+Project-supported OpenRouter profiles are registered in
+`skillsbench_x/model_profiles.py`:
+
+| OpenRouter model | context | logical reasoning efforts |
+|---|---:|---|
+| `openrouter/qwen/qwen3-coder-next` | 262144 | `default` |
+| `openrouter/tencent/hy3` | 262144 | `default`, `none`, `low`, `high` |
+| `openrouter/deepseek/deepseek-v4-flash` | 1048576 | `default`, `high`, `xhigh` |
+| `openrouter/deepseek/deepseek-v4-pro` | 1048576 | `default`, `high`, `xhigh` |
+| `openrouter/moonshotai/kimi-k2.6` | 262144 | `default` |
+| `openrouter/z-ai/glm-5.2` | 1048576 | `default`, `high`, `xhigh` |
+| `openrouter/qwen/qwen3.5-397b-a17b` | 262144 | `default` |
+| `openrouter/openai/gpt-oss-120b` | 131072 | `default`, `low`, `medium`, `high` |
+
+Every profile supports both Codex and Claude Code. `default` omits all
+reasoning controls at the final local request boundary. Explicit Codex efforts
+use the Responses API's native `reasoning.effort`; explicit Claude Code efforts
+are normalized by the loopback filter into OpenRouter's Anthropic Messages
+shape so `none` and `xhigh` are not constrained by Claude Code's CLI enum.
+For Codex, each registered model is pinned at process launch (before ACP
+`set_model`), runs single-agent, and disables Codex's nested filesystem sandbox
+inside the already isolated no-network task Docker. This prevents the shared
+catalog's first entry from supplying the wrong base instructions and avoids the
+ARM image's missing-`bwrap` failure.
+
 MiniMax-M3 can also run with Codex as the harness through either MiniMax's
 official Responses API or OpenRouter's Responses API:
 

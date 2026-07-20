@@ -75,6 +75,7 @@ environment/Dockerfile.base    # shared base image, every skill-eval task
 environment/global_skills/     # 20 global skills baked into the base image;
                                # always available regardless of --with-skills
 skillsbench_x/                 # extension package
+  model_profiles.py            # project-owned model/harness/context/reasoning registry
   rollout.py                   # wraps `bench run` per task; normalizes ACP
                                # trajectory.jsonl → flat text on host
   rollout_direct.py            # alt: drives `codex exec` directly (no Docker)
@@ -111,11 +112,34 @@ uv run python3 skillsbench_x/run_experiment.py --config <yaml> --only judge,aggr
 uv run python3 skillsbench_x/run_experiment.py --config <yaml> --dry-run --rows 0
 ```
 
-Reasoning-effort sweeps (codex-acp only, via the BenchFlow `feat/reasoning-effort`
-patch) are wired through the YAML's matrix row `reasoning:` field, e.g.
+Reasoning-effort sweeps are wired through the YAML's matrix row `reasoning:` field, e.g.
 `reasoning: low | medium | high | xhigh` for gpt-5.5. Four sibling configs
 live in `experiments/configs/skill-eval/codex-gpt5_5-{low,medium,high,xhigh}.yaml`;
 `experiments/sweep-codex-gpt5_5-efforts.sh` runs them sequentially.
+
+New OpenRouter rollout models must first be registered in
+`skillsbench_x/model_profiles.py`. That profile is the project-level source of
+truth for context window, supported harness/agent pairs, and each harness's
+logical reasoning range. Every registered range includes `default`, represented
+internally by `None`: no explicit effort is forwarded. If a harness injects its
+own reasoning controls, a profile may enable the generic BenchFlow
+`omit-reasoning` request filter so the upstream provider still receives no
+reasoning override. Claude Code profiles can also apply explicit efforts at the
+OpenRouter request boundary, independently of Claude Code's own effort enum.
+Current dual-harness profiles are Qwen3-Coder-Next (`default`), Tencent Hy3
+(`default/none/low/high`), and DeepSeek V4 Flash/Pro
+(`default/high/xhigh`), Kimi K2.6 (`default`), GLM 5.2
+(`default/high/xhigh`), Qwen3.5 397B A17B (`default`), and GPT-OSS-120B
+(`default/low/medium/high`).
+
+Every project-supported OpenRouter Codex model must also have an exact
+`agent_model_launch_suffixes` entry in BenchFlow. The suffix pins the stripped
+model slug before the ACP session is created, disables Codex multi-agent, and
+sets the inner Codex sandbox to `danger-full-access`. The outer task Docker is
+still the isolation boundary (including the task's no-network policy); the
+inner override avoids relying on `bwrap`, which is unavailable in the ARM task
+image. Without the startup model pin, Codex initializes with the first model in
+the shared catalog and uses the wrong model's base instructions.
 
 Defaults: `--harness codex` ⇒ `codex-acp / gpt-5.5`, `--harness claude-code` ⇒
 `claude-agent-acp / claude-sonnet-4-6`. BenchFlow auto-symlinks `--skills-dir`

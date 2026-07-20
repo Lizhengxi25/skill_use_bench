@@ -28,6 +28,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Keep the documented ``python3 skillsbench_x/rollout.py`` entrypoint working.
+# Direct file execution puts skillsbench_x/, rather than the repository root,
+# on sys.path, so package imports need the parent directory added explicitly.
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from skillsbench_x.model_profiles import (
+    get_rollout_model_profile,
+    model_runtime_agent_env,
+    model_runtime_reasoning_effort,
+    reasoning_effort_label,
+    validate_rollout_model_candidate,
+)
+
 DEFAULT_HARNESS_AGENT = {
     "claude-code": "claude-agent-acp",
     "codex": "codex-acp",
@@ -41,6 +55,7 @@ DEFAULT_HARNESS_MODEL = {
 def resolve_reasoning_effort(agent: str, model: str,
                              requested: str | None) -> str | None:
     """Return the explicitly requested reasoning value without model-specific defaults."""
+    validate_rollout_model_candidate(model, agent=agent, reasoning=requested)
     return requested
 
 
@@ -373,11 +388,28 @@ def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
     jobs_dir.mkdir(parents=True)
 
     started_at = utcnow()
+    runtime_agent_env = (
+        model_runtime_agent_env(model, agent=agent, reasoning=reasoning_effort)
+        if model
+        else {}
+    )
+    runtime_reasoning_effort = (
+        model_runtime_reasoning_effort(
+            model,
+            agent=agent,
+            reasoning=reasoning_effort,
+        )
+        if model
+        else reasoning_effort
+    )
+    model_profile = get_rollout_model_profile(model) if model else None
     (out / "metadata.tsv").write_text(
         f"task_id\t{task_id}\n"
         f"agent\t{agent}\n"
         f"model\t{model or ''}\n"
         f"reasoning_effort\t{reasoning_effort or ''}\n"
+        f"reasoning_effort_label\t{reasoning_effort_label(reasoning_effort)}\n"
+        f"model_context_window\t{model_profile.context_window if model_profile else ''}\n"
         f"with_skills\t{with_skills}\n"
         f"prompt\t{prompt_note}\n"
         f"capture_workspace\t{capture_workspace}\n"
@@ -396,13 +428,14 @@ def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
     ]
     if model:
         cmd += ["--model", model]
-    if reasoning_effort:
+    for key, value in sorted(runtime_agent_env.items()):
+        cmd += ["--agent-env", f"{key}={value}"]
+    if runtime_reasoning_effort:
         # Forward to BenchFlow's `--reasoning-effort` flag (added in the
-        # feat/reasoning-effort patch).  Validation lives upstream:
-        # RolloutConfig.__post_init__ rejects unknown values, and
-        # Rollout.setup raises when the chosen agent has no
-        # reasoning_effort_flag — so we just pass the string through.
-        cmd += ["--reasoning-effort", reasoning_effort]
+        # feat/reasoning-effort patch). Some registered harness/model pairs
+        # intentionally apply the logical effort at the provider request
+        # boundary instead, in which case this translated value is omitted.
+        cmd += ["--reasoning-effort", runtime_reasoning_effort]
     if with_skills:
         skills_dir = task_dir / "environment" / "skills"
         if skills_dir.exists():
@@ -510,7 +543,8 @@ def main() -> int:
                         help="Reasoning effort (none/minimal/low/medium/high/xhigh). "
                              "Forwarded to `bench run --reasoning-effort`; only "
                              "agents whose AgentConfig declares reasoning_effort_flag "
-                             "(currently codex-acp) accept it. When omitted, no "
+                             "(currently codex-acp and claude-agent-acp) accept it. "
+                             "When omitted, no "
                              "`--reasoning-effort` flag is passed. Typos and unsupported "
                              "agents fail fast at rollout setup.")
     parser.add_argument("--prompt", default=None,
@@ -556,6 +590,7 @@ def main() -> int:
     agent = args.agent or DEFAULT_HARNESS_AGENT[args.harness]
     model = args.model or DEFAULT_HARNESS_MODEL[args.harness]
     reasoning_effort = resolve_reasoning_effort(agent, model, args.reasoning)
+    model_profile = get_rollout_model_profile(model)
     extra = list(args.bench_extra_args or [])
     if extra and extra[0] == "--":
         extra = extra[1:]
@@ -583,6 +618,10 @@ def main() -> int:
         "agent": agent,
         "model": model,
         "reasoning_effort": reasoning_effort,
+        "reasoning_effort_label": reasoning_effort_label(reasoning_effort),
+        "model_context_window": (
+            model_profile.context_window if model_profile else None
+        ),
         "with_skills": args.with_skills,
         "prompt": prompt_note,
         "capture_workspace": args.capture_workspace,
@@ -596,7 +635,9 @@ def main() -> int:
     print(f"run_dir: {run_dir}")
     print(
         f"agent: {agent}  with_skills: {args.with_skills}  "
-        f"reasoning_effort: {reasoning_effort or '-'}  tasks: {len(task_dirs)}"
+        f"reasoning_effort: {reasoning_effort_label(reasoning_effort)}  "
+        f"context_window: {model_profile.context_window if model_profile else '-'}  "
+        f"tasks: {len(task_dirs)}"
     )
 
     failures = 0
