@@ -386,6 +386,32 @@ def normalize_rootless_podman_ownership(jobs_dir: Path) -> None:
         )
 
 
+def codex_native_turn_died(native_session: Path) -> bool:
+    """True when the session's final ``task_complete`` carries no final
+    assistant message. Observed on ~50% of MiniMax-M3-via-OpenRouter codex
+    runs: the provider mangles the model's native tool call into the
+    reasoning stream, codex receives neither a call nor a message, and the
+    turn ends silently mid-task. Such runs must be recorded as FAILED
+    (retryable) — never as complete — or they poison judge scores.
+    """
+    last = None
+    try:
+        with native_session.open() as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except ValueError:
+                    continue
+                if item.get("type") == "task_complete":
+                    last = item
+    except OSError:
+        return False
+    return last is not None and last.get("last_agent_message") is None
+
+
 def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
             with_skills: bool, repo_root: Path,
             bench_extra_args: list[str],
@@ -516,6 +542,10 @@ def run_one(task_dir: Path, run_dir: Path, agent: str, model: str | None,
             trajectory_text = codex_native_jsonl_to_text(native_codex)
             note = f"normalized from {native_codex.relative_to(rollout_dir)} (codex native session)"
             shutil.copy2(native_codex, out / "trajectory.jsonl")
+            if rc == 0 and codex_native_turn_died(native_codex):
+                rc = 1
+                note += (" | FAILED: turn ended with last_agent_message=null "
+                         "(provider tool-call mangling); marked failed for retry")
         elif traj_jsonl is not None:
             trajectory_text = jsonl_to_text(traj_jsonl)
             note = f"normalized from {traj_jsonl.relative_to(rollout_dir)}"

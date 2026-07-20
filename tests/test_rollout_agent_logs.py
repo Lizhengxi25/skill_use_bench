@@ -78,3 +78,29 @@ def test_run_one_harvests_agent_stdout_and_stderr_logs(tmp_path, monkeypatch):
     assert (out / "codex_acp.stderr.txt").read_text() == "provider error detail\n"
     assert not (out / "trajectory.jsonl").exists()
     assert (out / "exit_code.txt").read_text() == "1\n"
+
+
+def test_codex_native_turn_died_detects_null_final_message(tmp_path):
+    s = tmp_path / "codex_native_session.jsonl"
+    s.write_text(
+        '{"type":"task_started"}\n'
+        '{"type":"reasoning","text":"]<]minimax[>[<tool_call>..."}\n'
+        '{"type":"task_complete","last_agent_message":null}\n'
+    )
+    assert rollout.codex_native_turn_died(s) is True
+
+
+def test_codex_native_turn_died_accepts_real_final_message(tmp_path):
+    s = tmp_path / "codex_native_session.jsonl"
+    s.write_text(
+        '{"type":"task_started"}\n'
+        '{"type":"task_complete","last_agent_message":"All done: created X."}\n'
+    )
+    assert rollout.codex_native_turn_died(s) is False
+
+
+def test_codex_native_turn_died_tolerates_missing_or_empty(tmp_path):
+    assert rollout.codex_native_turn_died(tmp_path / "absent.jsonl") is False
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("")
+    assert rollout.codex_native_turn_died(empty) is False
