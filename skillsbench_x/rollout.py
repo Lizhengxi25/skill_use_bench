@@ -6,8 +6,8 @@ For each task under --tasks:
      `skillsbench-base:latest`) — BenchFlow does this automatically.
   2. Invoke `uv run bench eval run --tasks-dir <task_dir> --agent <harness>
      --sandbox docker --skill-mode <mode> [--skills-dir ...] --model <model>`.
-  3. Locate the rollout output BenchFlow wrote and copy/normalize the
-     captured ACP trajectory into runs/<run_id>/<task_id>/trajectory.log.
+  3. Locate the rollout output BenchFlow wrote and copy/normalize the richest
+     available trajectory into runs/<run_id>/<task_id>/trajectory.log.
   4. Write our own metadata.tsv + exit_code.txt so judge.py / aggregate.py
      keep working unchanged.
 
@@ -34,6 +34,11 @@ from pathlib import Path
 # on sys.path, so package imports need the parent directory added explicitly.
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from benchflow.trajectories.export_prime_sft import (
+    load_llm_trajectory_jsonl,
+    normalize_prime_sft_exchange,
+)
 
 from skillsbench_x.model_profiles import (
     get_rollout_model_profile,
@@ -349,6 +354,77 @@ def codex_native_jsonl_to_text(jsonl_path: Path) -> str:
     return "\n\n".join(out) + "\n"
 
 
+BENCHFLOW_LLM_PREAMBLE = (
+    "# Trajectory format note\n"
+    "This trajectory was reconstructed from BenchFlow's structured provider-boundary\n"
+    "LLM exchanges. BenchFlow normalizes Chat Completions, Anthropic Messages, and\n"
+    "Responses payloads through its Prime-SFT parser and redacts credential values\n"
+    "before this judge-facing transcript is rendered. The final successful exchange\n"
+    "contains the complete conversation visible to the model, including tool calls\n"
+    "and tool results. Raw chain-of-thought fields are intentionally not rendered.\n"
+)
+
+
+def _render_benchflow_message(message: dict, index: int) -> str:
+    role = str(message.get("role") or "message")
+    content = _codex_block_text(message.get("content", ""))
+    cap = RESULT_CAP_BY_KIND["execute"]
+
+    if role == "tool":
+        call_id = str(message.get("tool_call_id") or "")
+        body = [
+            f"[#{index} tool_result]",
+            f"call_id: {call_id}",
+            f"output:  {_truncate(content, cap)}",
+        ]
+        return "\n".join(body)
+
+    body = [f"[#{index} {role}_message]"]
+    if content.strip():
+        body.append(_truncate(content, cap))
+
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get("function")
+            if not isinstance(function, dict):
+                function = {}
+            payload = {
+                "name": function.get("name") or tool_call.get("name") or "",
+                "call_id": tool_call.get("id") or tool_call.get("call_id") or "",
+                "arguments": (function.get("arguments") if "arguments" in function else tool_call.get("arguments", "")),
+            }
+            body.extend(["tool_call:", *_render_codex_function_call(payload, cap)])
+    return "\n".join(body)
+
+
+def benchflow_llm_jsonl_to_text(jsonl_path: Path) -> str:
+    """Render the last healthy structured BenchFlow LLM exchange for the judge."""
+    if not jsonl_path.exists():
+        return ""
+    exchanges = load_llm_trajectory_jsonl(jsonl_path)
+    for exchange in reversed(exchanges):
+        response = exchange.get("response")
+        if not isinstance(response, dict) or response.get("status_code") != 200:
+            continue
+        normalized, skip_reason = normalize_prime_sft_exchange(
+            exchange,
+            redact=True,
+        )
+        if normalized is None or skip_reason is not None:
+            continue
+        rendered = [
+            _render_benchflow_message(message, index)
+            for index, message in enumerate(normalized.messages, start=1)
+            if isinstance(message, dict) and message.get("role") not in {"system", "developer"}
+        ]
+        if rendered:
+            return "\n\n".join([BENCHFLOW_LLM_PREAMBLE, *rendered]) + "\n"
+    return ""
+
+
 def discover_tasks(tasks_arg: Path) -> list[Path]:
     def is_task(path: Path) -> bool:
         return (path / "task.md").is_file() or ((path / "task.toml").is_file() and (path / "instruction.md").is_file())
@@ -574,6 +650,7 @@ def run_one(
             (p for p in native_codex_candidates if p.exists() and p.stat().st_size > 0 and os.access(p, os.R_OK)),
             None,
         )
+        llm_trajectory = rollout_dir / "trajectory" / "llm_trajectory.jsonl"
         # ACP harness trajectory (codex-acp / claude-agent-acp / ...)
         traj_jsonl_candidates = [
             rollout_dir / "agent" / "acp_trajectory.jsonl",
@@ -593,6 +670,11 @@ def run_one(
             trajectory_text = codex_native_jsonl_to_text(native_codex)
             note = f"normalized from {native_codex.relative_to(rollout_dir)} (codex native session)"
             shutil.copy2(native_codex, out / "trajectory.jsonl")
+        elif llm_trajectory.is_file() and os.access(llm_trajectory, os.R_OK):
+            trajectory_text = benchflow_llm_jsonl_to_text(llm_trajectory)
+            if trajectory_text:
+                note = "normalized from trajectory/llm_trajectory.jsonl (BenchFlow structured provider exchanges)"
+                shutil.copy2(llm_trajectory, out / "trajectory.jsonl")
         elif traj_jsonl is not None:
             trajectory_text = jsonl_to_text(traj_jsonl)
             note = f"normalized from {traj_jsonl.relative_to(rollout_dir)}"
@@ -611,6 +693,8 @@ def run_one(
         for src in (agent_log, agent_stderr_log):
             if src.exists() and os.access(src, os.R_OK):
                 shutil.copy2(src, out / src.name)
+        if llm_trajectory.is_file() and os.access(llm_trajectory, os.R_OK):
+            shutil.copy2(llm_trajectory, out / "llm_trajectory.jsonl")
         model_io_dir = rollout_dir / "agent" / "model_io"
         if model_io_dir.is_dir() and os.access(model_io_dir, os.R_OK):
             shutil.copytree(
