@@ -49,6 +49,7 @@ warn_return_any = true
 warn_unused_ignores = true
 
 [tool.uv.sources]
+benchflow = { path = "../benchflow", editable = true }
 skills-ref = { git = "https://github.com/agentskills/agentskills.git", subdirectory = "skills-ref", rev = "7f094a2f794fbf6ccf805f601cdc497110b8a8cd" }
 
 [dependency-groups]
