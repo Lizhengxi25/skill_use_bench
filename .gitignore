@@ -16,8 +16,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -137,7 +137,9 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
+.env*
+!.env.example
+!.env.sample
 .envrc
 .venv
 env/
@@ -239,5 +241,11 @@ experiments/metrics-dashboard/tsconfig.tsbuildinfo
 # Trajectories stored in separate repo
 skillsbench-trajectories/
 .vite
-.env.local
 .vercel/_deps/
+
+# Local experiment credentials and diagnostics not covered above
+/keys.env
+/secrets/
+/debug/
+/trials/
+/.claude/settings.local.json

@@ -24,6 +24,9 @@ HY3 = "openrouter/tencent/hy3"
 DEEPSEEK_FLASH = "openrouter/deepseek/deepseek-v4-flash"
 DEEPSEEK_PRO = "openrouter/deepseek/deepseek-v4-pro"
 KIMI_K26 = "openrouter/moonshotai/kimi-k2.6"
+MINIMAX_M3 = "openrouter/minimax/minimax-m3"
+MINIMAX_M27 = "openrouter/minimax/minimax-m2.7"
+GLM_51 = "openrouter/z-ai/glm-5.1"
 GLM_52 = "openrouter/z-ai/glm-5.2"
 QWEN_35_397B = "openrouter/qwen/qwen3.5-397b-a17b"
 GPT_OSS_120B = "openrouter/openai/gpt-oss-120b"
@@ -32,7 +35,12 @@ TARGET_MODEL_LIMITS = (
     (HY3, 262_144, 65_536),
     (GPT_OSS_120B, 131_072, 65_536),
     (QWEN_35_397B, 262_144, 65_536),
+    (GLM_51, 200_000, 128_000),
     (GLM_52, 1_048_576, 131_072),
+    (KIMI_K26, 262_144, 65_536),
+    (MINIMAX_M3, 524_288, 131_072),
+    (MINIMAX_M27, 196_608, 131_072),
+    (DEEPSEEK_PRO, 1_048_576, 131_072),
     (DEEPSEEK_FLASH, 1_048_576, 131_072),
 )
 
@@ -118,6 +126,9 @@ def test_rollout_entrypoint_rejects_agent_that_does_not_match_harness():
         (DEEPSEEK_FLASH, 1_048_576, ("default", "high", "xhigh")),
         (DEEPSEEK_PRO, 1_048_576, ("default", "high", "xhigh")),
         (KIMI_K26, 262_144, ("default",)),
+        (MINIMAX_M3, 524_288, ("default", "none", "low", "medium", "high")),
+        (MINIMAX_M27, 196_608, ("default", "none", "low", "medium", "high")),
+        (GLM_51, 200_000, ("default",)),
         (GLM_52, 1_048_576, ("default", "high", "xhigh")),
         (QWEN_35_397B, 262_144, ("default",)),
         (GPT_OSS_120B, 131_072, ("default", "low", "medium", "high")),
@@ -136,6 +147,11 @@ def test_new_openrouter_profiles_expose_expected_harnesses(
     if model in {
         HY3,
         DEEPSEEK_FLASH,
+        DEEPSEEK_PRO,
+        KIMI_K26,
+        MINIMAX_M3,
+        MINIMAX_M27,
+        GLM_51,
         GLM_52,
         QWEN_35_397B,
         GPT_OSS_120B,
@@ -152,6 +168,9 @@ def test_new_openrouter_profiles_expose_expected_harnesses(
         DEEPSEEK_FLASH,
         DEEPSEEK_PRO,
         KIMI_K26,
+        MINIMAX_M3,
+        MINIMAX_M27,
+        GLM_51,
         GLM_52,
         QWEN_35_397B,
         GPT_OSS_120B,
@@ -175,6 +194,9 @@ def test_new_openrouter_profiles_preserve_true_default(model):
         (DEEPSEEK_FLASH, ("high", "xhigh"), ("none", "minimal", "low", "medium")),
         (DEEPSEEK_PRO, ("high", "xhigh"), ("none", "minimal", "low", "medium")),
         (KIMI_K26, (), ("none", "minimal", "low", "medium", "high", "xhigh")),
+        (MINIMAX_M3, ("none", "low", "medium", "high"), ("minimal", "xhigh")),
+        (MINIMAX_M27, ("none", "low", "medium", "high"), ("minimal", "xhigh")),
+        (GLM_51, (), ("none", "minimal", "low", "medium", "high", "xhigh")),
         (GLM_52, ("high", "xhigh"), ("none", "minimal", "low", "medium")),
         (QWEN_35_397B, (), ("none", "minimal", "low", "medium", "high", "xhigh")),
         (GPT_OSS_120B, ("low", "medium", "high"), ("none", "minimal", "xhigh")),
@@ -225,6 +247,11 @@ def test_claude_explicit_effort_is_applied_at_openrouter_request_boundary(model,
     [
         (HY3, None, 65_536),
         (DEEPSEEK_FLASH, None, 131_072),
+        (DEEPSEEK_PRO, None, 131_072),
+        (KIMI_K26, None, 65_536),
+        (MINIMAX_M3, None, 131_072),
+        (MINIMAX_M27, None, 131_072),
+        (GLM_51, None, 128_000),
         (GLM_52, None, 131_072),
         (GLM_52, "xhigh", 131_072),
         (QWEN_35_397B, None, 65_536),
@@ -399,6 +426,27 @@ def test_unregistered_models_keep_legacy_behavior():
         )
         == {}
     )
+
+
+@pytest.mark.parametrize(
+    ("harness", "agent"),
+    [
+        ("claude-code", None),
+        (None, "claude-agent-acp"),
+    ],
+)
+def test_unregistered_claude_models_reject_explicit_reasoning_before_acp(harness, agent):
+    """Regress Zed PR #260: CC 2.1.19 has model config but no ACP effort config."""
+    with pytest.raises(
+        ValueError,
+        match=r"unregistered model .* cannot use explicit reasoning with Claude Code",
+    ):
+        validate_rollout_model_candidate(
+            "openrouter/vendor/unregistered-model",
+            harness=harness,
+            agent=agent,
+            reasoning="high",
+        )
 
 
 def test_qwen_runtime_profile_is_forwarded_to_benchflow(tmp_path, monkeypatch):

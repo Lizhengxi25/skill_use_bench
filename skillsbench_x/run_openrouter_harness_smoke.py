@@ -44,7 +44,12 @@ MODELS = {
     "hy3": "openrouter/tencent/hy3",
     "gpt-oss-120b": "openrouter/openai/gpt-oss-120b",
     "qwen3.5-397b": "openrouter/qwen/qwen3.5-397b-a17b",
+    "glm-5.1": "openrouter/z-ai/glm-5.1",
     "glm-5.2": "openrouter/z-ai/glm-5.2",
+    "kimi-k2.6": "openrouter/moonshotai/kimi-k2.6",
+    "minimax-m3": "openrouter/minimax/minimax-m3",
+    "minimax-m2.7": "openrouter/minimax/minimax-m2.7",
+    "deepseek-v4-pro": "openrouter/deepseek/deepseek-v4-pro",
     "deepseek-v4-flash": "openrouter/deepseek/deepseek-v4-flash",
 }
 HARNESSES = ("claude-code", "openhands")
@@ -295,6 +300,106 @@ def _has_completed_skill_read(
     return bool(candidate_ids & completed_ids)
 
 
+def _validate_litellm_callbacks(
+    callback_path: Path,
+    *,
+    expected_model: str,
+) -> list[str]:
+    """Reject hidden proxy failures or calls routed to another model."""
+    errors: list[str] = []
+    expected_provider_model = expected_model.removeprefix("openrouter/")
+    accepted_callback_models = {expected_provider_model}
+    if expected_provider_model.startswith("openai/"):
+        # LiteLLM's Anthropic adapter drops this provider prefix in callbacks.
+        # The captured OpenRouter response is checked separately below.
+        accepted_callback_models.add(expected_provider_model.removeprefix("openai/"))
+    try:
+        lines = callback_path.read_text(errors="replace").splitlines()
+    except OSError as exc:
+        return [f"unreadable LiteLLM callback log: {exc}"]
+
+    saw_record = False
+    saw_expected_success = False
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        saw_record = True
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            errors.append(f"callback line {line_number} is invalid JSON: {exc}")
+            continue
+        if not isinstance(record, dict):
+            errors.append(f"callback line {line_number} is not a JSON object")
+            continue
+        event = record.get("event")
+        if "event" not in record:
+            errors.append(f"callback line {line_number} is missing event")
+            continue
+        if event not in {"success", "failure"}:
+            errors.append(f"callback line {line_number} has unknown event {event!r}")
+            continue
+        request_model = record.get("request_model")
+        provider_model = record.get("provider_model")
+        if event == "failure":
+            detail = record.get("error")
+            error_type = detail.get("type") if isinstance(detail, dict) else None
+            errors.append(f"callback line {line_number} failed ({error_type or 'unknown error'}) for model {request_model!r}")
+            continue
+        if request_model not in accepted_callback_models or provider_model not in accepted_callback_models:
+            errors.append(
+                f"callback line {line_number} used unexpected model {request_model!r}/{provider_model!r}; expected {expected_provider_model!r}"
+            )
+            continue
+        saw_expected_success = True
+
+    if not saw_record:
+        return ["callback log is empty"]
+    if not saw_expected_success:
+        errors.append(f"callback log has no successful call for expected model {expected_provider_model!r}")
+    return errors
+
+
+def _captured_provider_models(response_path: Path) -> set[str]:
+    """Extract canonical model IDs from complete JSON or streamed SSE bytes."""
+    text = response_path.read_text(errors="replace")
+    payloads: list[object] = []
+    try:
+        payloads.append(json.loads(text))
+    except json.JSONDecodeError:
+        for line in text.splitlines():
+            if not line.startswith("data:"):
+                continue
+            data = line.removeprefix("data:").strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                payloads.append(json.loads(data))
+            except json.JSONDecodeError:
+                continue
+
+    models: set[str] = set()
+
+    def collect(payload: object) -> None:
+        if isinstance(payload, list):
+            for item in payload:
+                collect(item)
+            return
+        if not isinstance(payload, dict):
+            return
+        model = payload.get("model")
+        if isinstance(model, str):
+            models.add(model)
+        # Cover OpenRouter chat chunks, Anthropic message_start, and Responses
+        # events without searching arbitrary generated content for "model".
+        for key in ("message", "response"):
+            collect(payload.get(key))
+
+    for payload in payloads:
+        collect(payload)
+    return models
+
+
 def validate_arm(spec: ArmSpec, return_code: int) -> tuple[bool, list[str]]:
     errors: list[str] = []
     leaf = spec.run_leaf
@@ -372,6 +477,15 @@ def validate_arm(spec: ArmSpec, return_code: int) -> tuple[bool, list[str]]:
         for filename in ("stdout.log", "stderr.log", "callback.jsonl"):
             if not (debug_dir / filename).is_file():
                 errors.append(f"{debug_dir.name}: missing LiteLLM {filename}")
+        callback_path = debug_dir / "callback.jsonl"
+        if callback_path.is_file():
+            errors.extend(
+                f"{debug_dir.name}: {error}"
+                for error in _validate_litellm_callbacks(
+                    callback_path,
+                    expected_model=spec.model,
+                )
+            )
         stdout_path = debug_dir / "stdout.log"
         stderr_path = debug_dir / "stderr.log"
         if stdout_path.is_file() and stderr_path.is_file():
@@ -429,6 +543,19 @@ def validate_arm(spec: ArmSpec, return_code: int) -> tuple[bool, list[str]]:
         response_file = request_dir / str(response.get("file")) if isinstance(response, dict) and response.get("file") else None
         if response_file is None or not response_file.is_file():
             errors.append(f"{request_dir.name}: missing provider response bytes")
+        else:
+            try:
+                captured_models = _captured_provider_models(response_file)
+            except OSError as exc:
+                errors.append(f"{request_dir.name}: unreadable provider response bytes: {exc}")
+            else:
+                expected_provider_model = spec.model.removeprefix("openrouter/")
+                unexpected_models = sorted(captured_models - {expected_provider_model})
+                if unexpected_models:
+                    errors.append(
+                        f"{request_dir.name}: provider response used unexpected model(s) "
+                        f"{unexpected_models!r}; expected {expected_provider_model!r}"
+                    )
         if not request_path.is_file():
             errors.append(f"{request_dir.name}: missing provider_request.body")
         if not request_json.is_file():

@@ -60,6 +60,11 @@ DEFAULT_HARNESS_MODEL = {
     "openhands": "openrouter/z-ai/glm-5.2",
 }
 
+# A zero from BenchFlow is not enough when its current attempt produced no
+# structured trajectory. Keep this distinct from provider/process failures so
+# operators can identify an artifact-harvest failure from exit_code.txt.
+MISSING_TRAJECTORY_EXIT_CODE = 3
+
 
 def resolve_reasoning_effort(
     agent: str,
@@ -759,6 +764,7 @@ def run_one(
     rollout_dir = locate_rollout_dir(jobs_dir, task_id)
     debug_harvest_errors: list[str] = []
     trajectory_text = ""
+    trajectory_jsonl_harvested = False
     note = ""
     if rollout_dir is not None:
         try:
@@ -810,7 +816,7 @@ def run_one(
         if native_codex is not None:
             trajectory_text = codex_native_jsonl_to_text(native_codex)
             note = f"normalized from {native_codex.relative_to(rollout_dir)} (codex native session)"
-            _copy_readable_file(
+            trajectory_jsonl_harvested = _copy_readable_file(
                 native_codex,
                 out / "trajectory.jsonl",
                 debug_harvest_errors,
@@ -819,7 +825,7 @@ def run_one(
             trajectory_text = benchflow_llm_jsonl_to_text(llm_trajectory)
             if trajectory_text:
                 note = "normalized from trajectory/llm_trajectory.jsonl (BenchFlow structured provider exchanges)"
-                _copy_readable_file(
+                trajectory_jsonl_harvested = _copy_readable_file(
                     llm_trajectory,
                     out / "trajectory.jsonl",
                     debug_harvest_errors,
@@ -827,7 +833,7 @@ def run_one(
         elif traj_jsonl is not None:
             trajectory_text = jsonl_to_text(traj_jsonl)
             note = f"normalized from {traj_jsonl.relative_to(rollout_dir)}"
-            _copy_readable_file(
+            trajectory_jsonl_harvested = _copy_readable_file(
                 traj_jsonl,
                 out / "trajectory.jsonl",
                 debug_harvest_errors,
@@ -868,8 +874,12 @@ def run_one(
                 debug_harvest_errors,
             )
 
-    if not trajectory_text and rc == 0:
-        note = "WARNING: rollout completed but no trajectory artifact found"
+    if rc == 0 and not trajectory_jsonl_harvested:
+        # A rerun may target a leaf that already contains trajectory.jsonl.
+        # Do not delete that historical artifact, but never let it make this
+        # artifact-less attempt look successful to the pipeline.
+        rc = MISSING_TRAJECTORY_EXIT_CODE
+        note = "ERROR: rollout completed but this attempt harvested no trajectory.jsonl"
 
     _persist_debug_harvest_errors(out, debug_harvest_errors)
     (out / "trajectory.log").write_text(trajectory_text)

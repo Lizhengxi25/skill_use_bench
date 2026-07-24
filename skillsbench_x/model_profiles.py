@@ -157,6 +157,7 @@ ROLLOUT_MODEL_PROFILES: dict[str, RolloutModelProfile] = {
         reasoning_efforts=(DEFAULT_REASONING_EFFORT, "high", "xhigh"),
         codex_default_reasoning_level="high",
         codex_reasoning_levels=("high", "xhigh"),
+        openhands=True,
     ),
     "openrouter/moonshotai/kimi-k2.6": _openrouter_profile(
         "openrouter/moonshotai/kimi-k2.6",
@@ -167,6 +168,55 @@ ROLLOUT_MODEL_PROFILES: dict[str, RolloutModelProfile] = {
         codex_default_reasoning_level="high",
         codex_reasoning_levels=("high",),
         input_modalities=("text", "image"),
+        openhands=True,
+    ),
+    "openrouter/minimax/minimax-m3": _openrouter_profile(
+        "openrouter/minimax/minimax-m3",
+        display_name="MiniMax M3",
+        # Bound the request to the smallest context currently advertised by
+        # OpenRouter's routed providers instead of assuming the 1M maximum.
+        context_window=524_288,
+        max_output_tokens=131_072,
+        reasoning_efforts=(
+            DEFAULT_REASONING_EFFORT,
+            "none",
+            "low",
+            "medium",
+            "high",
+        ),
+        codex_default_reasoning_level="high",
+        codex_reasoning_levels=("none", "low", "medium", "high"),
+        input_modalities=("text", "image"),
+        openhands=True,
+        supports_reasoning_summaries=False,
+    ),
+    "openrouter/minimax/minimax-m2.7": _openrouter_profile(
+        "openrouter/minimax/minimax-m2.7",
+        display_name="MiniMax M2.7",
+        context_window=196_608,
+        max_output_tokens=131_072,
+        reasoning_efforts=(
+            DEFAULT_REASONING_EFFORT,
+            "none",
+            "low",
+            "medium",
+            "high",
+        ),
+        codex_default_reasoning_level="high",
+        codex_reasoning_levels=("none", "low", "medium", "high"),
+        openhands=True,
+        supports_reasoning_summaries=False,
+    ),
+    "openrouter/z-ai/glm-5.1": _openrouter_profile(
+        "openrouter/z-ai/glm-5.1",
+        display_name="GLM 5.1",
+        context_window=200_000,
+        max_output_tokens=128_000,
+        reasoning_efforts=(DEFAULT_REASONING_EFFORT,),
+        codex_default_reasoning_level="none",
+        codex_reasoning_levels=("none",),
+        openhands=True,
+        supports_reasoning_summaries=False,
     ),
     "openrouter/z-ai/glm-5.2": _openrouter_profile(
         "openrouter/z-ai/glm-5.2",
@@ -254,6 +304,12 @@ def validate_rollout_model_candidate(
     """Validate a registered model and return its profile."""
     profile = get_rollout_model_profile(model)
     if profile is None:
+        # The pinned Zed Claude adapter (PR #260 / Claude Code 2.1.19) exposes model
+        # selection through ACP, but no reasoning-effort config.  Registered profiles
+        # translate effort at the provider boundary; an unknown profile cannot do that
+        # safely, so fail before BenchFlow starts Docker instead of dying during ACP setup.
+        if reasoning is not None and (harness == "claude-code" or agent == "claude-agent-acp"):
+            raise ValueError(f"unregistered model {model!r} cannot use explicit reasoning with Claude Code; add a rollout model profile first")
         return None
     harness_name, harness_profile = _resolve_harness_profile(
         profile,

@@ -43,7 +43,10 @@ def test_matrix_dry_run_prints_all_possible_arms_without_writes(tmp_path: Path, 
         for line in capsys.readouterr().out.splitlines()
         if line.startswith("DRY-RUN ") and ("/no_skill:" in line or "/with_skill:" in line)
     ]
-    assert len(lines) == 36
+    stage_one = len(smoke.MODELS) * len(smoke.HARNESSES) * len(smoke.ARMS)
+    stage_two_models = len(smoke.MODELS) - 1  # GLM 5.2 is intentionally stage-one only.
+    stage_two = stage_two_models * len(smoke.HARNESSES) * len(smoke.ARMS)
+    assert len(lines) == stage_one + stage_two
 
 
 def test_matrix_dry_run_can_select_one_diagnostic_rollout(tmp_path: Path, capsys) -> None:
@@ -129,13 +132,75 @@ def test_reasoning_validator_detects_request_level_controls() -> None:
     ]
 
 
+def test_callback_validator_accepts_litellm_openai_prefix_normalization(tmp_path: Path) -> None:
+    callback = tmp_path / "callback.jsonl"
+    callback.write_text(
+        json.dumps(
+            {
+                "event": "success",
+                "request_model": "gpt-oss-120b",
+                "provider_model": "gpt-oss-120b",
+            }
+        )
+        + "\n"
+    )
+
+    assert (
+        smoke._validate_litellm_callbacks(
+            callback,
+            expected_model="openrouter/openai/gpt-oss-120b",
+        )
+        == []
+    )
+
+
+def test_callback_validator_is_fail_closed(tmp_path: Path) -> None:
+    callback = tmp_path / "callback.jsonl"
+    cases = (
+        ("", "callback log is empty"),
+        ("[]\n", "callback line 1 is not a JSON object"),
+        ("{}\n", "callback line 1 is missing event"),
+        ('{"event": "heartbeat"}\n', "callback line 1 has unknown event 'heartbeat'"),
+        (
+            '{"event": "success", "request_model": "wrong/model", "provider_model": "wrong/model"}\n',
+            "callback line 1 used unexpected model",
+        ),
+    )
+
+    for contents, expected_error in cases:
+        callback.write_text(contents)
+        errors = smoke._validate_litellm_callbacks(
+            callback,
+            expected_model="openrouter/tencent/hy3",
+        )
+        assert any(expected_error in error for error in errors)
+        if contents:
+            assert "callback log has no successful call for expected model 'tencent/hy3'" in errors
+
+
+def test_captured_provider_models_supports_sse_and_json(tmp_path: Path) -> None:
+    response = tmp_path / "provider_response.sse"
+    response.write_text(
+        ": OPENROUTER PROCESSING\n\n"
+        'data: {"model":"openai/gpt-oss-120b","choices":[]}\n\n'
+        'data: {"type":"response.created","response":{"model":"openai/gpt-oss-120b"}}\n\n'
+        "data: [DONE]\n\n"
+    )
+    assert smoke._captured_provider_models(response) == {"openai/gpt-oss-120b"}
+
+    response.write_text('{"message":{"model":"tencent/hy3"}}')
+    assert smoke._captured_provider_models(response) == {"tencent/hy3"}
+
+
 def test_with_skill_prompts_use_each_harness_discovery_path() -> None:
     codex_prompt = smoke.WITH_SKILL_PROMPTS["codex"].read_text()
     claude_prompt = smoke.WITH_SKILL_PROMPTS["claude-code"].read_text()
     openhands_prompt = smoke.WITH_SKILL_PROMPTS["openhands"].read_text()
 
     assert "`$HOME/.agents/skills/`" in codex_prompt
-    assert "`$HOME/.claude/skills/`" in claude_prompt
+    # Use the deterministic workspace link rather than asking non-Claude models
+    # running under Claude Code to guess which sandbox user's HOME is active.
+    assert "`/app/.claude/skills/`" in claude_prompt
     assert "`/app/.agents/skills/`" in openhands_prompt
 
 
@@ -249,13 +314,24 @@ def test_arm_validator_requires_complete_provider_capture(tmp_path: Path) -> Non
     (leaf / "agent" / "openhands.acp_wire.jsonl").write_text("{}\n")
     litellm_debug = leaf / "agent" / "litellm" / "session-test"
     litellm_debug.mkdir(parents=True)
-    for filename in ("stdout.log", "stderr.log", "callback.jsonl"):
+    for filename in ("stdout.log", "stderr.log"):
         (litellm_debug / filename).write_text("captured\n")
+    callback_path = litellm_debug / "callback.jsonl"
+    callback_path.write_text(
+        json.dumps(
+            {
+                "event": "success",
+                "request_model": "tencent/hy3",
+                "provider_model": "tencent/hy3",
+            }
+        )
+        + "\n"
+    )
     (request / "logical_request.body").write_text("{}")
     (request / "logical_request.json").write_text("{}")
     (request / "provider_request.body").write_text("{}")
     (request / "provider_request.json").write_text("{}")
-    (request / "provider_response.sse").write_text("data: [DONE]\n\n")
+    (request / "provider_response.sse").write_text('data: {"model":"tencent/hy3"}\n\ndata: [DONE]\n\n')
     (request / "metadata.json").write_text(
         json.dumps(
             {
@@ -273,6 +349,37 @@ def test_arm_validator_requires_complete_provider_capture(tmp_path: Path) -> Non
     )
 
     assert smoke.validate_arm(spec, 0) == (True, [])
+
+    (request / "provider_response.sse").write_text('data: {"model":"wrong/model"}\n\ndata: [DONE]\n\n')
+    ok, provider_errors = smoke.validate_arm(spec, 0)
+    assert not ok
+    assert any("provider response used unexpected model(s)" in error for error in provider_errors)
+    (request / "provider_response.sse").write_text('data: {"model":"tencent/hy3"}\n\ndata: [DONE]\n\n')
+
+    callback_path.write_text(
+        json.dumps(
+            {
+                "event": "failure",
+                "request_model": "claude-haiku-4-5-20251001",
+                "provider_model": "claude-haiku-4-5-20251001",
+                "error": {"type": "ProxyModelNotFoundError"},
+            }
+        )
+        + "\n"
+    )
+    ok, callback_errors = smoke.validate_arm(spec, 0)
+    assert not ok
+    assert any("ProxyModelNotFoundError" in error and "claude-haiku-4-5-20251001" in error for error in callback_errors)
+    callback_path.write_text(
+        json.dumps(
+            {
+                "event": "success",
+                "request_model": "tencent/hy3",
+                "provider_model": "tencent/hy3",
+            }
+        )
+        + "\n"
+    )
 
     (litellm_debug / "stdout.log").write_text('"POST /v1/messages/count_tokens?beta=true HTTP/1.1" 200 OK\n')
     (litellm_debug / "stderr.log").write_text("Provider token counting failed (404)\nFalling back to local tokenizer.\n")

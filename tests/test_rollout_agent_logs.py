@@ -113,7 +113,9 @@ def test_run_one_harvests_agent_stdout_and_stderr_logs(tmp_path, monkeypatch):
         with_skills=False,
         repo_root=Path(tmp_path),
         bench_extra_args=[],
-        reasoning_effort="high",
+        # Keep this log-harvesting test independent of provider reasoning
+        # controls; those are covered by the model-profile tests.
+        reasoning_effort=None,
         prompt_prefix="",
         prompt_note="",
         capture_workspace=False,
@@ -184,6 +186,9 @@ def test_run_one_forwards_and_harvests_model_io(tmp_path, monkeypatch):
     model_io_dir = rollout_dir / "agent" / "model_io"
     model_io_dir.mkdir(parents=True)
     (rollout_dir / "verifier").mkdir()
+    trajectory_dir = rollout_dir / "trajectory"
+    trajectory_dir.mkdir()
+    (trajectory_dir / "llm_trajectory.jsonl").write_text(json.dumps(_llm_exchange()) + "\n")
     (model_io_dir / "logical_requests.jsonl").write_text('{"request": 1}\n')
     (model_io_dir / "provider_http.jsonl").write_text('{"body": 1}\n')
     (model_io_dir / "provider_sse.raw").write_bytes(b"data: response.completed\n\n")
@@ -223,6 +228,48 @@ def test_run_one_forwards_and_harvests_model_io(tmp_path, monkeypatch):
     assert (out / "agent" / "model_io" / "logical_requests.jsonl").read_text() == '{"request": 1}\n'
     metadata = (out / "metadata.tsv").read_text()
     assert "capture_model_io\tTrue\n" in metadata
+
+
+def test_run_one_rejects_stale_trajectory_when_current_attempt_has_none(
+    tmp_path,
+    monkeypatch,
+):
+    """Regression: an artifact-less rerun must not reuse the prior trajectory."""
+    task_dir = tmp_path / "task-one"
+    task_dir.mkdir()
+    run_dir = tmp_path / "runs" / "diagnostic"
+    out = run_dir / task_dir.name
+    out.mkdir(parents=True)
+    stale_trajectory = '{"type":"agent_message","text":"previous attempt"}\n'
+    (out / "trajectory.jsonl").write_text(stale_trajectory)
+    (out / "exit_code.txt").write_text("0\n")
+
+    rollout_dir = tmp_path / "jobs" / "trial"
+    (rollout_dir / "agent").mkdir(parents=True)
+    (rollout_dir / "verifier").mkdir()
+    monkeypatch.setattr(
+        rollout.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0),
+    )
+    monkeypatch.setattr(rollout, "locate_rollout_dir", lambda *args: rollout_dir)
+
+    task_id, rc, note = rollout.run_one(
+        task_dir=task_dir,
+        run_dir=run_dir,
+        agent="codex-acp",
+        model="gpt-5.5",
+        with_skills=False,
+        repo_root=Path(tmp_path),
+        bench_extra_args=[],
+        reasoning_effort="xhigh",
+    )
+
+    assert task_id == "task-one"
+    assert rc == rollout.MISSING_TRAJECTORY_EXIT_CODE
+    assert "this attempt harvested no trajectory.jsonl" in note
+    assert (out / "exit_code.txt").read_text() == (f"{rollout.MISSING_TRAJECTORY_EXIT_CODE}\n")
+    assert (out / "trajectory.jsonl").read_text() == stale_trajectory
 
 
 def test_run_one_persists_complete_debug_artifact_whitelist(
@@ -322,6 +369,9 @@ def test_debug_harvest_failures_do_not_change_success_return_code(
     run_dir = tmp_path / "runs" / "diagnostic"
     rollout_dir = tmp_path / "jobs" / "trial"
     (rollout_dir / "agent").mkdir(parents=True)
+    trajectory_dir = rollout_dir / "trajectory"
+    trajectory_dir.mkdir()
+    (trajectory_dir / "llm_trajectory.jsonl").write_text(json.dumps(_llm_exchange()) + "\n")
     verifier_dir = rollout_dir / "verifier"
     verifier_dir.mkdir()
     (rollout_dir / "result.json").write_text('{"error":null}\n')
