@@ -211,6 +211,15 @@ __marimo__/
 
 # Project-specific
 jobs/
+# Generated benchmark data and local rollout artifacts. These directories can
+# contain task workspaces, raw provider traffic, trajectories, and large archives;
+# keep them outside the source repository.
+/_archive/
+/codex_extract_logs/
+/grades/
+/runs/
+/tasks_runtime/
+/website/public/skilleval/
 # things for agents to explore
 .local-workspace/
 tasks/browsecomp*

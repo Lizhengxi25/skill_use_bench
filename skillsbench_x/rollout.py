@@ -459,6 +459,128 @@ def jobs_dir_for(run_dir: Path, task_id: str) -> Path:
     return jobs_root / "skillsbench-bfjobs" / run_dir.name / task_id
 
 
+def _record_debug_harvest_error(
+    errors: list[str] | None,
+    operation: str,
+    source: Path,
+    destination: Path,
+    exc: OSError,
+) -> None:
+    message = f"{operation}: {source} -> {destination}: {type(exc).__name__}: {exc}"
+    if errors is not None:
+        errors.append(message)
+    print(f"WARNING: debug artifact harvest failed: {message}", file=sys.stderr)
+
+
+def _copy_readable_file(
+    source: Path,
+    destination: Path,
+    errors: list[str] | None = None,
+) -> bool:
+    """Copy one regular readable artifact without following sandbox symlinks."""
+    try:
+        if source.is_symlink() or not source.is_file() or not os.access(source, os.R_OK):
+            return False
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    except OSError as exc:
+        _record_debug_harvest_error(
+            errors,
+            "copy file",
+            source,
+            destination,
+            exc,
+        )
+        return False
+    return True
+
+
+def _copy_readable_tree(
+    source: Path,
+    destination: Path,
+    errors: list[str] | None = None,
+) -> None:
+    """Copy a debug tree while skipping unreadable files and all symlinks.
+
+    Agent-controlled workspaces may contain symlinks outside the rollout tree,
+    and rootless Docker can leave a subset of copied files owned by a container
+    subuid. Persist regular readable files only, rather than following links or
+    failing the whole rollout while harvesting one inaccessible diagnostic.
+    """
+    try:
+        if source.is_symlink() or not source.is_dir() or not os.access(source, os.R_OK):
+            return
+        destination.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        _record_debug_harvest_error(
+            errors,
+            "create tree destination",
+            source,
+            destination,
+            exc,
+        )
+        return
+
+    try:
+        for root, dirnames, filenames in os.walk(source, followlinks=False):
+            root_path = Path(root)
+            dirnames[:] = sorted(name for name in dirnames if not (root_path / name).is_symlink())
+            target_dir = destination / root_path.relative_to(source)
+            try:
+                target_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                _record_debug_harvest_error(
+                    errors,
+                    "create tree directory",
+                    root_path,
+                    target_dir,
+                    exc,
+                )
+                dirnames.clear()
+                continue
+            for filename in sorted(filenames):
+                source_file = root_path / filename
+                _copy_readable_file(
+                    source_file,
+                    target_dir / filename,
+                    errors,
+                )
+    except OSError as exc:
+        _record_debug_harvest_error(
+            errors,
+            "walk tree",
+            source,
+            destination,
+            exc,
+        )
+
+
+def _persist_rollout_debug_artifacts(
+    rollout_dir: Path,
+    out: Path,
+    errors: list[str],
+) -> None:
+    """Persist the explicit debug-artifact whitelist out of local scratch."""
+    for filename in ("config.json", "timing.json", "prompts.json", "result.json"):
+        _copy_readable_file(rollout_dir / filename, out / filename, errors)
+    for dirname in ("agent", "trajectory", "verifier", "artifacts", "workspace"):
+        _copy_readable_tree(rollout_dir / dirname, out / dirname, errors)
+
+
+def _persist_debug_harvest_errors(out: Path, errors: list[str]) -> None:
+    """Persist harvest failures without allowing diagnostics to alter rollout rc."""
+    if not errors:
+        return
+    destination = out / "debug_harvest_errors.log"
+    try:
+        destination.write_text("\n".join(errors) + "\n")
+    except OSError as exc:
+        print(
+            f"WARNING: could not persist {destination}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def _without_option(args: list[str], option: str) -> list[str]:
     """Remove a repeated KEY VALUE option from passthrough CLI arguments."""
     cleaned: list[str] = []
@@ -507,6 +629,8 @@ def build_bench_run_command(
         if model
         else reasoning_effort
     )
+    if capture_workspace:
+        runtime_agent_env["BENCHFLOW_CAPTURE_WORKSPACE"] = "1"
 
     cmd = [
         "uv",
@@ -531,6 +655,8 @@ def build_bench_run_command(
         cmd += ["--agent-env", f"{key}={value}"]
     if runtime_reasoning_effort:
         cmd += ["--reasoning-effort", runtime_reasoning_effort]
+    if capture_model_io:
+        cmd.append("--capture-model-io")
     if with_skills:
         skills_dir = task_dir / "environment" / "skills"
         cmd += ["--skill-mode", "with-skill"]
@@ -555,11 +681,10 @@ def build_bench_run_command(
     if agent == "openhands":
         cmd += ["--agent-idle-timeout", "0"]
 
-    # BenchFlow 0.6 always writes trajectories and always runs the task
-    # verifier. These legacy switches remain accepted by this wrapper so old
-    # pipeline commands do not break, but there is no corresponding 0.6 CLI
-    # flag to forward.
-    del capture_workspace, capture_model_io, skip_verify
+    # BenchFlow 0.6 always runs the verifier. The legacy skip flag remains
+    # accepted so old pipeline commands do not break, but there is no
+    # corresponding 0.6 CLI flag to forward.
+    del skip_verify
     return cmd
 
 
@@ -632,9 +757,25 @@ def run_one(
     rc = proc.returncode
 
     rollout_dir = locate_rollout_dir(jobs_dir, task_id)
+    debug_harvest_errors: list[str] = []
     trajectory_text = ""
     note = ""
     if rollout_dir is not None:
+        try:
+            _persist_rollout_debug_artifacts(
+                rollout_dir,
+                out,
+                debug_harvest_errors,
+            )
+        except OSError as exc:
+            _record_debug_harvest_error(
+                debug_harvest_errors,
+                "persist debug trees",
+                rollout_dir,
+                out,
+                exc,
+            )
+
         # Prefer codex's harvested native session (full tool calls + results)
         # over the lossy codex-acp ACP trajectory.  BenchFlow only harvests this
         # file for codex runs, so its presence is the harness signal.
@@ -669,16 +810,28 @@ def run_one(
         if native_codex is not None:
             trajectory_text = codex_native_jsonl_to_text(native_codex)
             note = f"normalized from {native_codex.relative_to(rollout_dir)} (codex native session)"
-            shutil.copy2(native_codex, out / "trajectory.jsonl")
+            _copy_readable_file(
+                native_codex,
+                out / "trajectory.jsonl",
+                debug_harvest_errors,
+            )
         elif llm_trajectory.is_file() and os.access(llm_trajectory, os.R_OK):
             trajectory_text = benchflow_llm_jsonl_to_text(llm_trajectory)
             if trajectory_text:
                 note = "normalized from trajectory/llm_trajectory.jsonl (BenchFlow structured provider exchanges)"
-                shutil.copy2(llm_trajectory, out / "trajectory.jsonl")
+                _copy_readable_file(
+                    llm_trajectory,
+                    out / "trajectory.jsonl",
+                    debug_harvest_errors,
+                )
         elif traj_jsonl is not None:
             trajectory_text = jsonl_to_text(traj_jsonl)
             note = f"normalized from {traj_jsonl.relative_to(rollout_dir)}"
-            shutil.copy2(traj_jsonl, out / "trajectory.jsonl")
+            _copy_readable_file(
+                traj_jsonl,
+                out / "trajectory.jsonl",
+                debug_harvest_errors,
+            )
         elif transcript.exists():
             trajectory_text = transcript.read_text()
             note = "taken from agent/transcript.txt"
@@ -686,31 +839,50 @@ def run_one(
             trajectory_text = oracle_txt.read_text()
             note = "taken from agent/oracle.txt (oracle mode)"
 
-        for rel in ("result.json", "agent/transcript.txt", "verifier/reward.txt", "artifacts/workspace.tgz"):
+        for rel in (
+            "result.json",
+            "agent/transcript.txt",
+            "verifier/reward.txt",
+            "artifacts/workspace.tgz",
+        ):
             src = rollout_dir / rel
-            if src.exists() and os.access(src, os.R_OK):
-                shutil.copy2(src, out / Path(rel).name)
+            _copy_readable_file(
+                src,
+                out / Path(rel).name,
+                debug_harvest_errors,
+            )
         for src in (agent_log, agent_stderr_log):
-            if src.exists() and os.access(src, os.R_OK):
-                shutil.copy2(src, out / src.name)
-        if llm_trajectory.is_file() and os.access(llm_trajectory, os.R_OK):
-            shutil.copy2(llm_trajectory, out / "llm_trajectory.jsonl")
-        model_io_dir = rollout_dir / "agent" / "model_io"
-        if model_io_dir.is_dir() and os.access(model_io_dir, os.R_OK):
-            shutil.copytree(
+            _copy_readable_file(src, out / src.name, debug_harvest_errors)
+        _copy_readable_file(
+            llm_trajectory,
+            out / "llm_trajectory.jsonl",
+            debug_harvest_errors,
+        )
+        for model_io_dir in (
+            rollout_dir / "agent" / "model_io",
+            rollout_dir / "trajectory" / "model_io",
+        ):
+            _copy_readable_tree(
                 model_io_dir,
                 out / "model_io",
-                dirs_exist_ok=True,
+                debug_harvest_errors,
             )
 
     if not trajectory_text and rc == 0:
         note = "WARNING: rollout completed but no trajectory artifact found"
 
+    _persist_debug_harvest_errors(out, debug_harvest_errors)
     (out / "trajectory.log").write_text(trajectory_text)
 
     ended_at = utcnow()
     with (out / "metadata.tsv").open("a") as mf:
-        mf.write(f"ended_at_utc\t{ended_at}\nexit_code\t{rc}\nrollout_dir\t{rollout_dir or ''}\ntrajectory_note\t{note}\n")
+        mf.write(
+            f"ended_at_utc\t{ended_at}\n"
+            f"exit_code\t{rc}\n"
+            f"rollout_dir\t{rollout_dir or ''}\n"
+            f"trajectory_note\t{note}\n"
+            f"debug_harvest_error_count\t{len(debug_harvest_errors)}\n"
+        )
     (out / "exit_code.txt").write_text(f"{rc}\n")
 
     return task_id, rc, note
@@ -736,12 +908,14 @@ def main() -> int:
     parser.add_argument("--prompt", default=None, help="Text prepended before the task instruction.")
     parser.add_argument("--prompt-file", default=None, help="File whose contents are prepended before the task query (wins over --prompt).")
     parser.add_argument(
-        "--capture-workspace", action="store_true", help="Legacy compatibility flag; BenchFlow 0.6 has no workspace-capture CLI switch."
+        "--capture-workspace",
+        action="store_true",
+        help="Request workspace capture via BENCHFLOW_CAPTURE_WORKSPACE=1.",
     )
     parser.add_argument(
         "--capture-model-io",
         action="store_true",
-        help="Legacy compatibility flag; BenchFlow 0.6 always captures its normalized LLM trajectory.",
+        help="Request BenchFlow's opt-in final-provider model-I/O capture.",
     )
     parser.add_argument(
         "--dry-run",

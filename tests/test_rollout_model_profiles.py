@@ -28,6 +28,13 @@ GLM_52 = "openrouter/z-ai/glm-5.2"
 QWEN_35_397B = "openrouter/qwen/qwen3.5-397b-a17b"
 GPT_OSS_120B = "openrouter/openai/gpt-oss-120b"
 REPO_ROOT = Path(__file__).resolve().parents[1]
+TARGET_MODEL_LIMITS = (
+    (HY3, 262_144, 65_536),
+    (GPT_OSS_120B, 131_072, 65_536),
+    (QWEN_35_397B, 262_144, 65_536),
+    (GLM_52, 1_048_576, 131_072),
+    (DEEPSEEK_FLASH, 1_048_576, 131_072),
+)
 
 
 def test_rollout_script_supports_documented_direct_entrypoint():
@@ -126,7 +133,13 @@ def test_new_openrouter_profiles_expose_expected_harnesses(
     assert profile is not None
     assert profile.context_window == context_window
     expected = {"codex", "claude-code"}
-    if model in {GLM_52, QWEN_35_397B, GPT_OSS_120B}:
+    if model in {
+        HY3,
+        DEEPSEEK_FLASH,
+        GLM_52,
+        QWEN_35_397B,
+        GPT_OSS_120B,
+    }:
         expected.add("openhands")
     assert set(profile.harnesses) == expected
     assert all(item.reasoning_efforts == reasoning_efforts for item in profile.harnesses.values())
@@ -199,6 +212,10 @@ def test_claude_explicit_effort_is_applied_at_openrouter_request_boundary(model,
     assert env["BENCHFLOW_PROVIDER_MODEL_CONTEXT_WINDOW"] == str(profile.context_window)
     assert env["BENCHFLOW_PROVIDER_REQUEST_FILTER"] == (f"reasoning-effort:{reasoning}")
     assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == str(profile.context_window)
+    if model == GPT_OSS_120B:
+        assert env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "65536"
+    else:
+        assert "CLAUDE_CODE_MAX_OUTPUT_TOKENS" not in env
     assert model_runtime_reasoning_effort(model, agent="claude-agent-acp", reasoning=reasoning) is None
     assert model_runtime_reasoning_effort(model, agent="codex-acp", reasoning=reasoning) == reasoning
 
@@ -206,10 +223,12 @@ def test_claude_explicit_effort_is_applied_at_openrouter_request_boundary(model,
 @pytest.mark.parametrize(
     ("model", "reasoning", "expected_output_tokens"),
     [
+        (HY3, None, 65_536),
+        (DEEPSEEK_FLASH, None, 131_072),
         (GLM_52, None, 131_072),
         (GLM_52, "xhigh", 131_072),
         (QWEN_35_397B, None, 65_536),
-        (GPT_OSS_120B, "low", 131_072),
+        (GPT_OSS_120B, "low", 65_536),
     ],
 )
 def test_openhands_runtime_uses_profile_limits_and_provider_filter(
@@ -242,6 +261,125 @@ def test_openhands_runtime_uses_profile_limits_and_provider_filter(
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    ("harness", "agent"),
+    [
+        ("claude-code", "claude-agent-acp"),
+        ("openhands", "openhands"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("model", "context_window", "max_output_tokens"),
+    TARGET_MODEL_LIMITS,
+)
+def test_target_default_command_omits_all_reasoning_effort_controls(
+    harness,
+    agent,
+    model,
+    context_window,
+    max_output_tokens,
+):
+    command = rollout.build_bench_run_command(
+        task_dir=REPO_ROOT / "tasks" / "jax-computing-basics",
+        jobs_dir=REPO_ROOT / ".tmp-jobs",
+        agent=agent,
+        model=model,
+        with_skills=False,
+        bench_extra_args=[],
+        reasoning_effort=None,
+    )
+
+    agent_env = {}
+    for index, value in enumerate(command):
+        if value != "--agent-env":
+            continue
+        key, env_value = command[index + 1].split("=", 1)
+        agent_env[key] = env_value
+
+    assert "--reasoning-effort" not in command
+    assert agent_env["BENCHFLOW_PROVIDER_REQUEST_FILTER"] == "omit-reasoning"
+    assert agent_env["BENCHFLOW_PROVIDER_MODEL_CONTEXT_WINDOW"] == str(context_window)
+    assert "BENCHFLOW_REASONING_EFFORT" not in agent_env
+    assert "LLM_REASONING_EFFORT" not in agent_env
+    assert all(not value.startswith("reasoning-effort:") for value in agent_env.values())
+
+    if harness == "openhands":
+        assert agent_env["LLM_MAX_INPUT_TOKENS"] == str(context_window)
+        assert agent_env["LLM_MAX_OUTPUT_TOKENS"] == str(max_output_tokens)
+        assert agent_env["LLM_TIMEOUT"] == "115200"
+    else:
+        assert agent_env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == str(context_window)
+        if model == GPT_OSS_120B:
+            assert agent_env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "65536"
+        else:
+            assert "CLAUDE_CODE_MAX_OUTPUT_TOKENS" not in agent_env
+        assert "LLM_MAX_INPUT_TOKENS" not in agent_env
+        assert "LLM_MAX_OUTPUT_TOKENS" not in agent_env
+
+
+@pytest.mark.parametrize(
+    ("harness", "agent"),
+    [
+        ("claude-code", "claude-agent-acp"),
+        ("openhands", "openhands"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("model", "context_window", "max_output_tokens"),
+    TARGET_MODEL_LIMITS,
+)
+def test_target_default_cli_dry_run_omits_all_reasoning_effort_controls(
+    tmp_path,
+    monkeypatch,
+    capsys,
+    harness,
+    agent,
+    model,
+    context_window,
+    max_output_tokens,
+):
+    runs_root = tmp_path / "runs"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "rollout.py",
+            "--tasks",
+            str(REPO_ROOT / "tasks" / "jax-computing-basics"),
+            "--harness",
+            harness,
+            "--model",
+            model,
+            "--dry-run",
+            "--run-id",
+            "default-effort-check",
+            "--runs-root",
+            str(runs_root),
+        ],
+    )
+
+    assert rollout.main() == 0
+    output = capsys.readouterr().out
+
+    assert f"--agent {agent}" in output
+    assert "--reasoning-effort" not in output
+    assert "BENCHFLOW_REASONING_EFFORT" not in output
+    assert "LLM_REASONING_EFFORT" not in output
+    assert "reasoning-effort:" not in output
+    assert "BENCHFLOW_PROVIDER_REQUEST_FILTER=omit-reasoning" in output
+    assert f"BENCHFLOW_PROVIDER_MODEL_CONTEXT_WINDOW={context_window}" in output
+    if harness == "openhands":
+        assert f"LLM_MAX_INPUT_TOKENS={context_window}" in output
+        assert f"LLM_MAX_OUTPUT_TOKENS={max_output_tokens}" in output
+    else:
+        assert f"CLAUDE_CODE_MAX_CONTEXT_TOKENS={context_window}" in output
+        if model == GPT_OSS_120B:
+            assert "CLAUDE_CODE_MAX_OUTPUT_TOKENS=65536" in output
+        else:
+            assert "CLAUDE_CODE_MAX_OUTPUT_TOKENS" not in output
+    assert not runs_root.exists()
 
 
 def test_unregistered_models_keep_legacy_behavior():
@@ -374,6 +512,7 @@ def test_openhands_command_uses_skillsbench_11_runtime_settings():
         reasoning_effort="high",
         prompt_prefix="You must use the deployed skill.",
         capture_workspace=True,
+        capture_model_io=True,
         skip_verify=True,
     )
 
@@ -383,5 +522,8 @@ def test_openhands_command_uses_skillsbench_11_runtime_settings():
     assert command[command.index("--agent-idle-timeout") + 1] == "0"
     assert command[command.index("--prompt") + 1].startswith("You must use the deployed skill.\n\nGiven a set of tasks")
     assert "--capture-workspace" not in command
+    assert "--capture-model-io" in command
+    assert "BENCHFLOW_CAPTURE_WORKSPACE=1" in command
+    assert "BENCHFLOW_CAPTURE_MODEL_IO=1" not in command
     assert "--skip-verify" not in command
     assert "--reasoning-effort" not in command

@@ -18,10 +18,14 @@ stable while using the current BenchFlow evaluation CLI.
   1.1. The unregistered GPT-5.5 control path keeps its previous sandbox setting.
 - OpenHands uses no ACP idle timeout and an LLM request timeout of 115200
   seconds.
+- With-skill prompts use each harness's native discovery path: Codex reads
+  `$HOME/.agents/skills/`, Claude Code reads `$HOME/.claude/skills/`, and
+  OpenHands reads `/app/.agents/skills/`.
 - BenchFlow 0.6 always runs the verifier and captures its normalized LLM
-  trajectory. Legacy `--skip-verify`, `--capture-workspace`, and
-  `--capture-model-io` wrapper flags are accepted but are not forwarded because
-  those CLI switches do not exist in BenchFlow 0.6.
+  trajectory. The wrapper translates `--capture-workspace` into
+  `BENCHFLOW_CAPTURE_WORKSPACE=1`, and forwards `--capture-model-io` to
+  BenchFlow's explicit opt-in final-provider capture. Legacy `--skip-verify`
+  remains an accepted no-op.
 - `default` is an experiment label meaning no reasoning effort is sent to the
   provider. It is not an alias for any named effort level.
 
@@ -33,9 +37,12 @@ The persistent judge transcript prefers, in order:
 3. the ACP trajectory fallback.
 
 The structured provider trajectory retains model-visible tool calls and tool
-results without rendering raw chain of thought. Agent stdout, concurrently
-drained stderr, `result.json`, and the canonical LLM trajectory are copied from
-local scratch into the existing persistent run leaf.
+results without rendering raw chain of thought. The persistent run leaf keeps
+BenchFlow's `config.json`, `timing.json`, and `prompts.json`, plus the complete
+`agent/`, `trajectory/`, `verifier/`, `artifacts/`, and optional `workspace/`
+debug trees. Existing top-level compatibility files such as `result.json`,
+`trajectory.jsonl`, `trajectory.log`, `llm_trajectory.jsonl`, `reward.txt`,
+`workspace.tgz`, and agent stdout/stderr remain available.
 
 The GPT-5.5 control remains Codex-only. Its model and explicit reasoning effort
 are now selected when `codex-acp` starts, its existing `workspace-write` Codex
@@ -62,14 +69,15 @@ credential is `OPENROUTER_API_KEY`.
 
 | OpenRouter model | Context | Max output | Allowed efforts | Harnesses |
 |---|---:|---:|---|---|
+| `openrouter/tencent/hy3` | 262,144 | 65,536 | `default`, `none`, `low`, `high` | Codex, Claude Code, OpenHands |
+| `openrouter/deepseek/deepseek-v4-flash` | 1,048,576 | 131,072 | `default`, `high`, `xhigh` | Codex, Claude Code, OpenHands |
 | `openrouter/z-ai/glm-5.2` | 1,048,576 | 131,072 | `default`, `high`, `xhigh` | Codex, Claude Code, OpenHands |
 | `openrouter/qwen/qwen3.5-397b-a17b` | 262,144 | 65,536 | `default` | Codex, Claude Code, OpenHands |
-| `openrouter/openai/gpt-oss-120b` | 131,072 | 131,072 | `default`, `low`, `medium`, `high` | Codex, Claude Code, OpenHands |
+| `openrouter/openai/gpt-oss-120b` | 131,072 | 65,536 | `default`, `low`, `medium`, `high` | Codex, Claude Code, OpenHands |
 
-Existing pioneer profiles for HY3, DeepSeek V4 Flash/Pro, Kimi K2.6, and
-Qwen3-Coder-Next remain available on their previously registered Codex and
-Claude Code harnesses. They were not expanded to OpenHands in this integration.
-Kimi K3 and Kimi K2.7 Code remain unregistered.
+The existing DeepSeek V4 Pro, Kimi K2.6, and Qwen3-Coder-Next profiles remain
+available on their previously registered Codex and Claude Code harnesses. Kimi
+K3 and Kimi K2.7 Code remain unregistered.
 
 The model profile registry is the only project-owned place that defines
 supported harnesses, effort ranges, context windows, output limits, and Codex

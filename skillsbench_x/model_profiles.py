@@ -35,6 +35,7 @@ class RolloutModelProfile:
     input_modalities: tuple[str, ...]
     harnesses: dict[str, HarnessModelProfile]
     supports_reasoning_summaries: bool = True
+    claude_max_output_tokens: int | None = None
 
     def codex_model_profile_json(self) -> str:
         levels = [
@@ -98,6 +99,7 @@ def _openrouter_profile(
     input_modalities: tuple[str, ...] = ("text",),
     openhands: bool = False,
     supports_reasoning_summaries: bool = True,
+    claude_max_output_tokens: int | None = None,
 ) -> RolloutModelProfile:
     return RolloutModelProfile(
         model=model,
@@ -112,6 +114,7 @@ def _openrouter_profile(
             openhands=openhands,
         ),
         supports_reasoning_summaries=supports_reasoning_summaries,
+        claude_max_output_tokens=claude_max_output_tokens,
     )
 
 
@@ -134,6 +137,7 @@ ROLLOUT_MODEL_PROFILES: dict[str, RolloutModelProfile] = {
         reasoning_efforts=(DEFAULT_REASONING_EFFORT, "none", "low", "high"),
         codex_default_reasoning_level="none",
         codex_reasoning_levels=("none", "low", "high"),
+        openhands=True,
     ),
     "openrouter/deepseek/deepseek-v4-flash": _openrouter_profile(
         "openrouter/deepseek/deepseek-v4-flash",
@@ -143,6 +147,7 @@ ROLLOUT_MODEL_PROFILES: dict[str, RolloutModelProfile] = {
         reasoning_efforts=(DEFAULT_REASONING_EFFORT, "high", "xhigh"),
         codex_default_reasoning_level="high",
         codex_reasoning_levels=("high", "xhigh"),
+        openhands=True,
     ),
     "openrouter/deepseek/deepseek-v4-pro": _openrouter_profile(
         "openrouter/deepseek/deepseek-v4-pro",
@@ -188,7 +193,7 @@ ROLLOUT_MODEL_PROFILES: dict[str, RolloutModelProfile] = {
         "openrouter/openai/gpt-oss-120b",
         display_name="GPT-OSS-120B",
         context_window=131_072,
-        max_output_tokens=131_072,
+        max_output_tokens=65_536,
         reasoning_efforts=(
             DEFAULT_REASONING_EFFORT,
             "low",
@@ -198,6 +203,7 @@ ROLLOUT_MODEL_PROFILES: dict[str, RolloutModelProfile] = {
         codex_default_reasoning_level="medium",
         codex_reasoning_levels=("low", "medium", "high"),
         openhands=True,
+        claude_max_output_tokens=65_536,
     ),
 }
 
@@ -294,6 +300,8 @@ def model_runtime_agent_env(
         )
     elif agent == "claude-agent-acp":
         env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(profile.context_window)
+        if profile.claude_max_output_tokens is not None:
+            env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(profile.claude_max_output_tokens)
     elif agent == "openhands":
         env.update(
             {

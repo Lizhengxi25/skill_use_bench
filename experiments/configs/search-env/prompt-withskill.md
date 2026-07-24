@@ -1,1 +1,1 @@
-You must use the skill at `/app/.agents/skills/` to complete the request below.
+Before doing any other work, locate the single task skill under `/app/.agents/skills/`, read its `SKILL.md` completely, and follow it while completing the request below.
